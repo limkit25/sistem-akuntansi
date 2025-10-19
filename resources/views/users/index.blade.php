@@ -22,6 +22,7 @@
                             <th>Nama</th>
                             <th>Email</th>
                             <th style="width: 15%;">Role</th>
+                            <th>Klinik</th>
                             <th style="width: 15%;">Aksi</th>
                         </tr>
                     </thead>
@@ -36,6 +37,10 @@
                                         {{ $user->roles->first()->name ?? 'Tanpa Role' }}
                                     </span>
                                 </td>
+                                <td>
+                    {{-- Cek jika user punya relasi klinik dan tampilkan namanya --}}
+                    {{ $user->klinik->nama_klinik ?? '-' }}
+                </td>
                                 <td>
                                     {{-- 1. Perbaiki link Edit --}}
                                     <a href="{{ route('users.edit', $user->id) }}" class="btn btn-sm btn-warning">

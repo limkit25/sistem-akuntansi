@@ -23,7 +23,7 @@ class UserController extends Controller
     {
         // 2. Ambil semua user, beserta role-nya
         // Kita urutkan agar user 'Admin' (ID 1) selalu di atas
-        $users = User::with('roles')->orderBy('id', 'asc')->get();
+        $users = User::with('roles', 'klinik')->orderBy('id', 'asc')->get();
         
         // 3. Tampilkan view
         return view('users.index', compact('users'));

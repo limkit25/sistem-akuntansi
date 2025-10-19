@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Facades\URL;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -19,6 +20,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+       $ngrokUrl = 'httpss://5dad77514efe.ngrok-free.app';
+
+        // Paksa semua link asset() untuk menggunakan URL ini
+        if (app()->environment('local')) {
+            URL::forceRootUrl($ngrokUrl);
+            URL::forceScheme('httpss');
+        }
     }
 }

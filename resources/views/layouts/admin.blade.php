@@ -55,6 +55,42 @@
                             <p>Jurnal Umum</p>
                         </a>
                     </li>
+                    <li class="nav-header">LAPORAN</li>
+<li class="nav-item">
+    <a href="{{ route('laporan.bukuBesar') }}" class="nav-link {{ request()->is('laporan/buku-besar*') ? 'active' : '' }}">
+        <i class="nav-icon fas fa-folder"></i>
+        <p>Buku Besar</p>
+    </a>
+</li>
+<li class="nav-item">
+    <a href="{{ route('laporan.neracaSaldo') }}" class="nav-link {{ request()->is('laporan/neraca-saldo*') ? 'active' : '' }}">
+        <i class="nav-icon fas fa-balance-scale"></i>
+        <p>Neraca Saldo</p>
+    </a>
+</li>
+<li class="nav-item">
+    <a href="{{ route('laporan.labaRugi') }}" class="nav-link {{ request()->is('laporan/laba-rugi*') ? 'active' : '' }}">
+        <i class="nav-icon fas fa-chart-line"></i>
+        <p>Laporan Laba Rugi</p>
+    </a>
+</li>
+<li class="nav-item">
+    <a href="{{ route('laporan.neraca') }}" class="nav-link {{ request()->is('laporan/neraca*') ? 'active' : '' }}">
+        <i class="nav-icon fas fa-landmark"></i>
+        <p>Laporan Neraca</p>
+    </a>
+</li>
+<li class="nav-header">PENGATURAN</li>
+<li class="nav-item">
+    <a class="nav-link" href="#" onclick="event.preventDefault(); document.getElementById('logout-form').submit();">
+        <i class="nav-icon fas fa-sign-out-alt text-danger"></i>
+        <p class="text">Logout</p>
+    </a>
+    <form id="logout-form" action="{{ route('logout') }}" method="POST" style="display: none;">
+        @csrf
+    </form>
+</li>
+</ul>
                     </ul>
             </nav>
             </div>

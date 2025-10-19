@@ -22,18 +22,22 @@
                     <div class="row">
                         {{-- Filter Klinik (Hanya Superadmin) --}}
                         @role('Superadmin')
-                        <div class="col-md-3"> {{-- Adjust width --}}
+                        <div class="col-md-3">
                             <div class="form-group">
-                                <label for="klinik_id">Pilih Klinik <span class="text-danger">*</span></label>
-                                <select class="form-control select2bs4" id="klinik_id" name="klinik_id" required>
-                                    <option value="">-- Pilih Klinik --</option>
+                                <label for="klinik_id">Pilih Klinik / Konteks <span class="text-danger">*</span></label>
+                                <select class="form-control select2bs4 @error('klinik_id') is-invalid @enderror" id="klinik_id" name="klinik_id" required>
+                                    <option value="">-- Pilih Konteks --</option>
+                                    {{-- OPSI Global --}}
+                                    <option value="global" {{ $klinikIdFilter === 'global' ? 'selected' : '' }}>-- Hanya Akun Global --</option>
+                                    {{-- OPSI Klinik Spesifik --}}
                                     @foreach ($kliniks as $klinik)
                                         <option value="{{ $klinik->id }}"
                                             {{ $klinikIdFilter == $klinik->id ? 'selected' : '' }}>
-                                            {{ $klinik->nama_klinik }}
+                                            {{ $klinik->nama_klinik }} (Spesifik)
                                         </option>
                                     @endforeach
                                 </select>
+                                @error('klinik_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
                         @else
@@ -42,15 +46,13 @@
                         @endrole
 
                         {{-- Filter Akun --}}
-                        <div class="col-md-3"> {{-- Adjust width --}}
+                        <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}">
                             <div class="form-group">
                                 <label for="akun_id">Pilih Akun <span class="text-danger">*</span></label>
-                                <select class="form-control select2bs4" id="akun_id" name="akun_id" required>
+                                <select class="form-control select2bs4 @error('akun_id') is-invalid @enderror" id="akun_id" name="akun_id" required>
                                     <option value="">-- Pilih Akun --</option>
-                                    {{-- Opsi Akun akan bergantung pada pilihan klinik (jika Superadmin) atau klinik user --}}
-                                    {{-- Sebaiknya load akun via AJAX setelah klinik dipilih, atau kirim semua akun relevan dari controller --}}
-                                    {{-- Untuk sekarang, kita asumsikan controller mengirim semua akun relevan ($accounts) --}}
-                                    @foreach ($accounts as $account)
+                                    {{-- Gunakan $accountsForDropdown --}}
+                                    @foreach ($accountsForDropdown as $account)
                                         <option value="{{ $account->id }}"
                                                 data-saldo-normal="{{ $account->saldo_normal }}"
                                                 {{ $akunIdFilter == $account->id ? 'selected' : '' }}>
@@ -58,20 +60,23 @@
                                         </option>
                                     @endforeach
                                 </select>
+                                @error('akun_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
 
                         {{-- Filter Tanggal --}}
-                        <div class="col-md-2">
+                         <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-2' : 'col-md-3' }}">
                             <div class="form-group">
                                 <label for="start_date">Tanggal Awal</label>
-                                <input type="date" class="form-control" id="start_date" name="start_date" value="{{ $startDate }}" required>
+                                <input type="date" class="form-control @error('start_date') is-invalid @enderror" id="start_date" name="start_date" value="{{ $startDate }}" required>
+                                @error('start_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
-                        <div class="col-md-2">
+                         <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-2' : 'col-md-3' }}">
                             <div class="form-group">
                                 <label for="end_date">Tanggal Akhir</label>
-                                <input type="date" class="form-control" id="end_date" name="end_date" value="{{ $endDate }}" required>
+                                <input type="date" class="form-control @error('end_date') is-invalid @enderror" id="end_date" name="end_date" value="{{ $endDate }}" required>
+                                @error('end_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
 
@@ -88,20 +93,40 @@
             </form>
         </div>
         {{-- CARD HASIL LAPORAN --}}
-        {{-- Tampilkan hanya jika SEMUA filter (klinik & akun) sudah dipilih/ditentukan --}}
-        @if ($klinikDipilih && $akunDipilih)
-            @php $namaKlinikTampil = $klinikDipilih->nama_klinik; @endphp
+        @php
+            $showReport = false;
+            $namaKlinikTampil = '-'; // Default
+
+            // Tentukan konteks laporan (Global atau Nama Klinik)
+            if ($klinikIdFilter === 'global' && $akunDipilih && $akunDipilih->klinik_id === null) {
+                 $namaKlinikTampil = 'Global';
+                 $showReport = true;
+            } elseif (is_numeric($klinikIdFilter) && $klinikDipilih && $akunDipilih && ($akunDipilih->klinik_id === null || $akunDipilih->klinik_id == $klinikIdFilter)) {
+                 $namaKlinikTampil = $klinikDipilih->nama_klinik;
+                 $showReport = true;
+            } elseif (!Auth::user()->hasRole('Superadmin') && Auth::user()->klinik_id && $akunDipilih && ($akunDipilih->klinik_id === null || $akunDipilih->klinik_id == Auth::user()->klinik_id)) {
+                 $namaKlinikTampil = Auth::user()->klinik->nama_klinik ?? 'Klinik Error';
+                 $showReport = true;
+            }
+        @endphp
+
+        {{-- Tampilkan tabel laporan HANYA jika showReport true --}}
+        @if ($showReport)
             <div class="card">
                 <div class="card-header">
-                    <h3 class="card-title">
+                     <h3 class="card-title">
                         Buku Besar: <strong>[{{ $akunDipilih->kode_akun }}] {{ $akunDipilih->nama_akun }}</strong> <br>
-                        <small>Klinik: {{ $namaKlinikTampil }}</small>
+                        <small>Konteks: {{ $namaKlinikTampil }}</small>
                     </h3>
                     <div class="card-tools">
                         Periode: {{ \Carbon\Carbon::parse($startDate)->format('d M Y') }} s/d {{ \Carbon\Carbon::parse($endDate)->format('d M Y') }}
                     </div>
                 </div>
                 <div class="card-body p-0">
+                     {{-- Tampilkan warning jika akun tidak valid (dari Controller) --}}
+                    @if(session('warning'))
+                        <div class="alert alert-warning m-2">{{ session('warning') }}</div>
+                    @endif
                     <table class="table table-bordered table-striped">
                         <thead>
                             <tr class="bg-light">
@@ -114,19 +139,15 @@
                         </thead>
                         <tbody>
                             @php $saldo = $saldoAwal; @endphp
-                            {{-- Baris Saldo Awal --}}
                             <tr>
                                 <td colspan="4" class="text-bold">Saldo Awal</td>
                                 <td class="text-right text-bold">{{ number_format($saldo, 2, ',', '.') }}</td>
                             </tr>
-
-                            {{-- Loop Mutasi Transaksi --}}
                             @forelse ($data as $detail)
                                 @php
-                                    // Hitung Saldo Berjalan (Running Balance)
                                     if ($akunDipilih->saldo_normal == 'Debit') {
                                         $saldo += $detail->debit - $detail->kredit;
-                                    } else { // Saldo normal 'Kredit'
+                                    } else {
                                         $saldo += $detail->kredit - $detail->debit;
                                     }
                                 @endphp
@@ -139,12 +160,11 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="5" class="text-center">Tidak ada transaksi pada periode ini untuk akun dan klinik yang dipilih.</td>
+                                    <td colspan="5" class="text-center">Tidak ada transaksi pada periode ini untuk akun dan konteks klinik yang dipilih.</td>
                                 </tr>
                             @endforelse
                         </tbody>
                         <tfoot>
-                            {{-- Baris Saldo Akhir --}}
                             <tr class="bg-light">
                                 <td colspan="4" class="text-bold text-right">Saldo Akhir</td>
                                 <td class="text-right text-bold">{{ number_format($saldo, 2, ',', '.') }}</td>
@@ -152,16 +172,19 @@
                         </tfoot>
                     </table>
                 </div>
-                </div>
-         @elseif(isset($error)) {{-- Error jika Admin/Staf tidak punya klinik --}}
+            </div>
+         {{-- Kondisi lain untuk menampilkan pesan info/error --}}
+         @elseif(isset($error))
             <div class="alert alert-danger">{{ $error }}</div>
-        @elseif(Auth::user()->hasRole('Superadmin') && !$klinikIdFilter && $akunIdFilter)
-             <div class="alert alert-warning">Silakan pilih Klinik terlebih dahulu.</div>
-        @elseif($klinikIdFilter && !$akunIdFilter)
+         @elseif(Auth::user()->hasRole('Superadmin') && !$klinikIdFilter)
+            <div class="alert alert-info">Silakan pilih Konteks Klinik/Global dan Akun untuk menampilkan laporan.</div>
+         @elseif($klinikIdFilter && !$akunIdFilter && !isset($error))
              <div class="alert alert-warning">Silakan pilih Akun untuk menampilkan Buku Besar.</div>
-        @elseif(Auth::user()->hasRole('Superadmin') && !$klinikIdFilter && !$akunIdFilter)
-            <div class="alert alert-info">Silakan pilih Klinik dan Akun untuk menampilkan laporan Buku Besar.</div>
-        @endif
+         @elseif(session('warning')) {{-- Tampilkan warning jika akun tidak valid --}}
+             <div class="alert alert-warning">{{ session('warning') }} Silakan pilih Akun yang sesuai.</div>
+         @elseif(!Auth::user()->hasRole('Superadmin') && Auth::user()->klinik_id && !$akunIdFilter)
+             <div class="alert alert-info">Silakan pilih Akun untuk menampilkan Buku Besar klinik Anda.</div>
+         @endif
         {{-- AKHIR CARD HASIL LAPORAN --}}
 
     </div>
@@ -176,12 +199,12 @@
         // Inisialisasi Select2
         $('.select2bs4').select2({
             theme: 'bootstrap4',
-            placeholder: $(this).data('placeholder') || '-- Pilih --', // Generic placeholder
-            allowClear: true // Allow clearing selection
+            placeholder: $(this).data('placeholder') || '-- Pilih --',
+            allowClear: true
         });
 
         // Set nilai Select2 yang dipilih (jika ada)
-        let selectedKlinikId = "{{ $klinikIdFilter ?? '' }}";
+        let selectedKlinikId = "{{ $klinikIdFilter ?? '' }}"; // Bisa 'global' atau ID
         if (selectedKlinikId) {
             $('#klinik_id').val(selectedKlinikId).trigger('change');
         }
@@ -190,18 +213,68 @@
             $('#akun_id').val(selectedAkunId).trigger('change');
         }
 
-        // TODO (Opsional): Implementasi AJAX untuk memuat Akun berdasarkan Klinik
-        // $('#klinik_id').on('change', function() {
-        //     let klinikId = $(this).val();
-        //     let akunSelect = $('#akun_id');
-        //     akunSelect.prop('disabled', true).empty().append(new Option('Memuat Akun...', '', true, true)).trigger('change');
-        //     if(klinikId) {
-        //         // Panggil AJAX ke route baru (misal /get-accounts-for-report/{klinikId})
-        //         // Success: Isi ulang akunSelect, enable lagi
-        //     } else {
-        //          akunSelect.prop('disabled', false).empty().append(new Option('-- Pilih Akun --', '', true, true)).trigger('change'); // Reset jika klinik kosong
-        //     }
-        // });
+        // TODO (SANGAT DIREKOMENDASIKAN): Implementasi AJAX untuk memuat Akun berdasarkan Klinik/Global
+        $('#klinik_id').on('change', function() {
+            let klinikContext = $(this).val(); // Bisa 'global' atau ID
+            let akunSelect = $('#akun_id');
+
+            // Kosongkan dan nonaktifkan dropdown akun saat memuat
+            akunSelect.prop('disabled', true).empty().append(new Option('Memuat Akun...', '', true, true)).trigger('change');
+
+            if(klinikContext) {
+                 // Buat route AJAX baru yg bisa handle 'global' atau ID
+                 // Nama route ini perlu dibuat di web.php
+                let url = "{{ url('/get-accounts-for-report') }}/" + klinikContext;
+                 $.ajax({
+                    url: url,
+                    method: 'GET',
+                    success: function(accountsData) {
+                        // Hapus opsi loading dan tambahkan opsi default
+                        akunSelect.empty().append(new Option('-- Pilih Akun --', '', true, true));
+                        // Isi dengan data baru
+                        accountsData.forEach(function(account) {
+                             let prefix = account.klinik_id === null ? '[G] ' : '';
+                            akunSelect.append(new Option(`${prefix}[${account.kode_akun}] ${account.nama_akun}`, account.id));
+                        });
+                        // Aktifkan kembali dan trigger change
+                        akunSelect.prop('disabled', false).trigger('change');
+                    },
+                    error: function(jqXHR, textStatus, errorThrown) {
+                        console.error("AJAX Error:", textStatus, errorThrown);
+                        toastr.error('Gagal memuat daftar akun.');
+                        // Tampilkan pesan error di dropdown
+                         akunSelect.prop('disabled', false).empty().append(new Option('-- Gagal Memuat Akun --', '', true, true)).trigger('change');
+                    }
+                 });
+            } else {
+                 // Jika tidak ada konteks dipilih, kosongkan & enable dropdown akun
+                 akunSelect.prop('disabled', false).empty().append(new Option('-- Pilih Konteks Klinik/Global Dulu --', '', true, true)).trigger('change');
+            }
+        });
+        // Jika Superadmin & ada filter klinik awal, trigger change untuk load akun awal
+        @role('Superadmin')
+        if(selectedKlinikId){
+            // Kita beri sedikit delay agar Select2 Klinik sempat terinisialisasi
+            setTimeout(function() {
+                $('#klinik_id').trigger('change');
+                 // Setelah akun dimuat, set nilai akun yang dipilih jika ada
+                setTimeout(function(){
+                     if (selectedAkunId) {
+                        $('#akun_id').val(selectedAkunId).trigger('change');
+                    }
+                }, 500); // Delay tambahan
+            }, 100);
+        } else if (selectedAkunId) { // Jika hanya akun yang dipilih (tidak seharusnya terjadi tanpa klinik)
+             $('#akun_id').val(selectedAkunId).trigger('change');
+        }
+        @else
+            // Jika Admin/Staf dan ada akun filter awal
+            if (selectedAkunId) {
+                 $('#akun_id').val(selectedAkunId).trigger('change');
+            }
+        @endrole
+
     });
 </script>
+{{-- Jangan lupa buat route AJAX '/get-accounts-for-report/{context}' di web.php --}}
 @endpush

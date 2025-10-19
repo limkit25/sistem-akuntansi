@@ -10,6 +10,8 @@ use App\Models\Klinik; // Pastikan ini ada
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth; // Pastikan ini ada
+use app\models\user;
+
 
 class LaporanController extends Controller
 {
@@ -17,10 +19,14 @@ class LaporanController extends Controller
      * Menampilkan halaman filter dan laporan Buku Besar.
      * Disesuaikan untuk filter klinik berdasarkan role.
      */
+    /**
+     * Menampilkan halaman filter dan laporan Buku Besar.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     * Dropdown akun difilter berdasarkan klinik yang dipilih.
+     */
     public function bukuBesar(Request $request)
     {
         $user = Auth::user();
-        $accounts = ChartOfAccount::orderBy('kode_akun', 'asc')->get();
 
         // Ambil klinik yang relevan untuk filter
         $kliniks = collect();
@@ -30,33 +36,26 @@ class LaporanController extends Controller
             $kliniks = Klinik::where('id', $user->klinik_id)->get();
         }
 
-        // Siapkan variabel
-        $data = collect();
-        $saldoAwal = 0;
-        $akunDipilih = null;
-        $klinikDipilih = null;
-
         // Tentukan Klinik ID yang akan difilter
         $klinikIdFilter = null;
         if ($user->hasRole('Superadmin')) {
-            $klinikIdFilter = $request->input('klinik_id');
+            // Jika Superadmin memilih 'global' di filter, simpan sebagai string
+            if ($request->input('klinik_id') === 'global') {
+                $klinikIdFilter = 'global';
+            } else {
+                // Jika memilih ID klinik, simpan sebagai integer
+                $klinikIdFilter = $request->input('klinik_id');
+            }
         } else {
-            // Admin Klinik & Staf otomatis pakai klinik ID mereka
-            // (Tidak perlu filter dari request)
             $klinikIdFilter = $user->klinik_id;
-            // Jika Admin/Staf tidak punya klinik, tampilkan error di view
-             if (!$klinikIdFilter) {
+            if (!$klinikIdFilter && !$user->hasRole('Superadmin')) {
                  return view('laporan.buku-besar', [
-                     'accounts' => $accounts,
-                     'kliniks' => $kliniks,
-                     'data' => $data,
-                     'saldoAwal' => $saldoAwal,
-                     'akunDipilih' => $akunDipilih,
-                     'klinikDipilih' => $klinikDipilih,
+                     'accountsForDropdown' => collect(),
+                     'kliniks' => $kliniks, 'data' => collect(), 'saldoAwal' => 0,
+                     'akunDipilih' => null, 'klinikDipilih' => null,
                      'startDate' => $request->input('start_date', date('Y-m-01')),
                      'endDate' => $request->input('end_date', date('Y-m-t')),
-                     'klinikIdFilter' => null,
-                     'akunIdFilter' => $request->input('akun_id'),
+                     'klinikIdFilter' => null, 'akunIdFilter' => $request->input('akun_id'),
                      'error' => 'Akun Anda belum terhubung ke klinik.'
                  ]);
              }
@@ -67,66 +66,79 @@ class LaporanController extends Controller
         $endDate = $request->input('end_date', date('Y-m-t'));
         $akunIdFilter = $request->input('akun_id');
 
-        // --- Proses HANYA JIKA klinik dan akun sudah dipilih/ditentukan ---
-        if ($klinikIdFilter && $akunIdFilter) {
+        // Ambil akun UNTUK DROPDOWN berdasarkan klinik yang difilter
+        $accountsForDropdown = collect();
+        if ($klinikIdFilter === 'global') {
+             // Tampilkan hanya akun global
+            $accountsForDropdown = ChartOfAccount::whereNull('klinik_id')
+                                    ->orderBy('kode_akun', 'asc')
+                                    ->get();
+        } elseif (is_numeric($klinikIdFilter)) {
+            // Ambil akun global DAN akun spesifik klinik yang dipilih
+            $accountsForDropdown = ChartOfAccount::where(function($query) use ($klinikIdFilter) {
+                                        $query->whereNull('klinik_id')
+                                              ->orWhere('klinik_id', $klinikIdFilter);
+                                    })
+                                    ->orderByRaw('klinik_id IS NULL DESC, kode_akun ASC')
+                                    ->get();
+        } elseif ($user->hasRole('Superadmin') && !$request->filled('klinik_id')) {
+             // Superadmin belum filter klinik, dropdown akun kosong
+             $accountsForDropdown = collect();
+        }
+        // Admin/Staf tanpa klinik sudah dihandle
+
+        // Siapkan variabel hasil laporan
+        $data = collect();
+        $saldoAwal = 0;
+        $akunDipilih = null;
+        $klinikDipilih = null; // Ini akan berisi model Klinik jika dipilih
+
+        // --- Proses Laporan HANYA JIKA klinik SPESIFIK/GLOBAL dan akun sudah dipilih ---
+        if ($akunIdFilter && ($klinikIdFilter === 'global' || is_numeric($klinikIdFilter))) {
             $akunDipilih = ChartOfAccount::find($akunIdFilter);
-            $klinikDipilih = Klinik::find($klinikIdFilter);
+            // Tentukan ID klinik aktual untuk query (null jika global)
+            $actualKlinikId = is_numeric($klinikIdFilter) ? (int)$klinikIdFilter : null;
+            if (is_numeric($klinikIdFilter)) {
+                 $klinikDipilih = Klinik::find($klinikIdFilter); // Ambil model Klinik
+            }
 
-            if (!$akunDipilih || !$klinikDipilih) {
-                 $akunDipilih = null;
-                 $klinikDipilih = null;
+
+            // Validasi Akun vs Klinik
+            $isValidAccount = false;
+            if ($akunDipilih) {
+                if ($klinikIdFilter === 'global' && $akunDipilih->klinik_id === null) {
+                    $isValidAccount = true; // Akun global valid untuk filter global
+                } elseif (is_numeric($klinikIdFilter) && ($akunDipilih->klinik_id === null || $akunDipilih->klinik_id == $actualKlinikId)) {
+                    $isValidAccount = true; // Akun global atau akun klinik yg benar valid
+                }
+            }
+
+
+            if (!$isValidAccount) {
+                 $akunDipilih = null; // Reset akunDipilih
                  $data = collect();
-                 // Tambahkan pesan error jika perlu
+                 session()->flash('warning', 'Akun yang dipilih tidak valid untuk konteks klinik ini.');
             } else {
-                // --- HITUNG SALDO AWAL ---
-                $saldoAwalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
-                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
-                    ->where('jurnals.tanggal_transaksi', '<', $startDate)
-                    ->sum('jurnal_details.debit');
-
-                $saldoAwalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
-                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
-                    ->where('jurnals.tanggal_transaksi', '<', $startDate)
-                    ->sum('jurnal_details.kredit');
-
-                $saldoAwal = ($akunDipilih->saldo_normal == 'Debit')
-                           ? ($saldoAwalDebits - $saldoAwalKredits)
-                           : ($saldoAwalKredits - $saldoAwalDebits);
-
-                // --- AMBIL MUTASI TRANSAKSI ---
-                $data = JurnalDetail::with('jurnal')
-                    ->join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
-                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
-                    ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                    ->orderBy('jurnals.tanggal_transaksi', 'asc')
-                    ->orderBy('jurnals.id', 'asc')
-                    ->select('jurnal_details.*')
-                    ->get();
+                // --- HITUNG SALDO AWAL & MUTASI ---
+                $saldoAwal = $this->hitungSaldoAwal($akunDipilih, $startDate, $actualKlinikId);
+                $data = $this->ambilMutasi($akunDipilih, $startDate, $endDate, $actualKlinikId);
             }
         }
 
         // Kirim data ke view
         return view('laporan.buku-besar', compact(
-            'accounts',
+            'accountsForDropdown',
             'kliniks',
             'data',
             'saldoAwal',
             'akunDipilih',
-            'klinikDipilih',
+            'klinikDipilih', // Kirim model Klinik atau null
             'startDate',
             'endDate',
-            'klinikIdFilter', // Kirim ID klinik yang difilter (untuk selected di view)
-            'akunIdFilter'    // Kirim ID akun yang difilter (untuk selected di view)
+            'klinikIdFilter', // Kirim 'global' atau ID
+            'akunIdFilter'
         ));
     }
-
-    /**
-     * Menampilkan laporan Neraca Saldo.
-     * Disesuaikan untuk filter klinik berdasarkan role.
-     */
     public function neracaSaldo(Request $request)
     {
         $user = Auth::user();
@@ -468,4 +480,46 @@ class LaporanController extends Controller
 
         return $totalPendapatan - $totalBiaya;
     }
+    private function hitungSaldoAwal($account, $startDate, $klinikId) // Pastikan nama SAMA PERSIS
+    {
+        // Tentukan ID klinik aktual (null jika 'global')
+        $actualKlinikId = is_numeric($klinikId) ? (int)$klinikId : null;
+
+        $saldoAwalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+            ->where('jurnal_details.chart_of_account_id', $account->id)
+            ->where('jurnals.klinik_id', $actualKlinikId) // Gunakan actualKlinikId
+            ->where('jurnals.tanggal_transaksi', '<', $startDate) // Kurang dari startDate
+            ->sum('jurnal_details.debit');
+
+        $saldoAwalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+            ->where('jurnal_details.chart_of_account_id', $account->id)
+            ->where('jurnals.klinik_id', $actualKlinikId) // Gunakan actualKlinikId
+            ->where('jurnals.tanggal_transaksi', '<', $startDate) // Kurang dari startDate
+            ->sum('jurnal_details.kredit');
+
+        return ($account->saldo_normal == 'Debit')
+               ? ($saldoAwalDebits - $saldoAwalKredits)
+               : ($saldoAwalKredits - $saldoAwalDebits);
+    }
+
+    /**
+     * Fungsi helper untuk mengambil detail mutasi jurnal sebuah akun
+     * PADA rentang tanggal tertentu dan klinik tertentu (null jika global).
+     */
+    private function ambilMutasi($account, $startDate, $endDate, $klinikId) // Pastikan nama SAMA PERSIS
+    {
+        // Tentukan ID klinik aktual (null jika 'global')
+        $actualKlinikId = is_numeric($klinikId) ? (int)$klinikId : null;
+
+        return JurnalDetail::with('jurnal')
+            ->join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+            ->where('jurnal_details.chart_of_account_id', $account->id)
+            ->where('jurnals.klinik_id', $actualKlinikId) // Gunakan actualKlinikId
+            ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate]) // Antara startDate dan endDate
+            ->orderBy('jurnals.tanggal_transaksi', 'asc')
+            ->orderBy('jurnals.id', 'asc')
+            ->select('jurnal_details.*')
+            ->get();
+    }
+
 }

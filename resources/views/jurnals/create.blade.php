@@ -2,7 +2,7 @@
 
 @section('title', 'Buat Jurnal Umum Baru')
 
-{{-- Menambahkan CSS untuk Select2 --}}
+{{-- CSS for Select2 --}}
 @push('css')
     <link rel="stylesheet" href="{{ asset('plugins/select2/css/select2.min.css') }}">
     <link rel="stylesheet" href="{{ asset('plugins/select2-bootstrap4-theme/select2-bootstrap4.min.css') }}">
@@ -20,24 +20,60 @@
                 <div class="card-body">
                     {{-- Baris Header Jurnal (Induk) --}}
                     <div class="row">
-                        <div class="col-md-4">
+                        {{-- Kolom Tanggal (Lebar dinamis) --}}
+                        <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}">
                             <div class="form-group">
-                                <label for="tanggal_transaksi">Tanggal Transaksi</label>
-                                <input type="date" class="form-control" id="tanggal_transaksi" name="tanggal_transaksi" value="{{ date('Y-m-d') }}" required>
+                                <label for="tanggal_transaksi">Tanggal Transaksi <span class="text-danger">*</span></label>
+                                <input type="date" class="form-control @error('tanggal_transaksi') is-invalid @enderror" id="tanggal_transaksi" name="tanggal_transaksi" value="{{ old('tanggal_transaksi', date('Y-m-d')) }}" required>
+                                @error('tanggal_transaksi') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
-                        <div class="col-md-4">
+
+                        {{-- Kolom Klinik (Hanya Superadmin) --}}
+                        @role('Superadmin')
+                        <div class="col-md-3">
+                            <div class="form-group">
+                                <label for="klinik_id">Klinik <span class="text-danger">*</span></label>
+                                <select class="form-control select2bs4 @error('klinik_id') is-invalid @enderror" id="klinik_id" name="klinik_id" required>
+                                    <option value="">-- Pilih Klinik --</option>
+                                    @foreach ($kliniks as $klinik)
+                                        <option value="{{ $klinik->id }}" {{ old('klinik_id') == $klinik->id ? 'selected' : '' }}>
+                                            {{ $klinik->nama_klinik }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                 @error('klinik_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            </div>
+                        </div>
+                        @endrole
+
+                        {{-- Kolom Nomor Bukti (Lebar dinamis) --}}
+                        <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}">
                             <div class="form-group">
                                 <label for="nomor_bukti">Nomor Bukti (Opsional)</label>
-                                <input type="text" class="form-control" id="nomor_bukti" name="nomor_bukti" placeholder="Contoh: INV/10/2025/001">
+                                <input type="text" class="form-control @error('nomor_bukti') is-invalid @enderror" id="nomor_bukti" name="nomor_bukti" placeholder="Contoh: INV/10/2025/001" value="{{ old('nomor_bukti') }}">
+                                @error('nomor_bukti') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        {{-- Kolom Deskripsi (Lebar dinamis) --}}
+                        <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}">
                             <div class="form-group">
-                                <label for="deskripsi">Deskripsi</label>
-                                <input type="text" class="form-control" id="deskripsi" name="deskripsi" placeholder="Contoh: Pembelian perlengkapan" required>
+                                <label for="deskripsi">Deskripsi <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control @error('deskripsi') is-invalid @enderror" id="deskripsi" name="deskripsi" placeholder="Contoh: Pembelian perlengkapan" value="{{ old('deskripsi') }}" required>
+                                @error('deskripsi') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
+
+                        {{-- Input Hidden Klinik ID untuk Non-Superadmin --}}
+                        @unlessrole('Superadmin')
+                            @if(Auth::user()->klinik_id)
+                                <input type="hidden" name="klinik_id" value="{{ Auth::user()->klinik_id }}">
+                            @else
+                                {{-- Jika tidak punya klinik_id, form tidak valid. Controller akan handle error. --}}
+                                {{-- Tambahkan pesan error visual jika mau --}}
+                                <div class="col-12"><div class="alert alert-danger">Akun Anda belum terhubung ke klinik.</div></div>
+                            @endif
+                        @endunlessrole
                     </div>
 
                     <hr>
@@ -54,7 +90,7 @@
                             </tr>
                         </thead>
                         <tbody id="journal-details-body">
-                            {{-- Baris pertama akan ditambahkan oleh JavaScript --}}
+                            {{-- Rows added by JS --}}
                         </tbody>
                         <tfoot>
                             <tr>
@@ -66,19 +102,13 @@
                             </tr>
                             <tr>
                                 <th>Total</th>
-                                <th>
-                                    <span id="total-debit">0</span>
-                                </th>
-                                <th>
-                                    <span id="total-kredit">0</span>
-                                </th>
+                                <th><span id="total-debit">0</span></th>
+                                <th><span id="total-kredit">0</span></th>
                                 <td></td>
                             </tr>
                             <tr>
                                 <th>Selisih</th>
-                                <th colspan="2">
-                                    <span id="total-selisih" class="text-danger">0</span>
-                                </th>
+                                <th colspan="2"><span id="total-selisih" class="text-danger">0</span></th>
                                 <td></td>
                             </tr>
                         </tfoot>
@@ -86,8 +116,9 @@
 
                 </div>
                 <div class="card-footer">
-                    <button type="submit" class="btn btn-primary">Simpan Jurnal</button>
-                    <a href="{{ route('jurnals.index') }}" class="btn btn-secondary">Batal</a>
+                    {{-- Disable button if Staf/Admin has no clinic --}}
+                    <button type="submit" class="btn btn-primary" {{ !Auth::user()->hasRole('Superadmin') && !$userKlinikId ? 'disabled' : '' }}>Simpan Jurnal</button>
+                    <a href="{{ route('jurnals.index', ['klinik_id' => $userKlinikId ?? (Auth::user()->hasRole('Superadmin') ? '' : '')]) }}" class="btn btn-secondary">Batal</a>
                 </div>
             </div>
             </form>
@@ -95,133 +126,156 @@
 </div>
 @endsection
 
-{{-- Menambahkan JS untuk Select2 dan Logika Dinamis --}}
+{{-- JS for Select2 and dynamic rows --}}
 @push('js')
 <script src="{{ asset('plugins/select2/js/select2.full.min.js') }}"></script>
-
 <script>
+    // Taruh variabel global di luar $(function) agar bisa diakses fungsi lain
+    const initialAccounts = @json($accountsForView);
+    let dynamicAccounts = initialAccounts; // Ini akan diupdate oleh AJAX
+    let rowIndex = 0; // Counter baris global
+
+    // Fungsi inisialisasi Select2 Akun
+    function initializeSelect2(element, accountsData = initialAccounts) {
+        $(element).empty();
+        $(element).append(new Option('-- Pilih Akun --', '', true, true)).trigger('change');
+        $(element).select2({
+            theme: 'bootstrap4',
+            placeholder: '-- Pilih Akun --',
+            data: accountsData.map(function(account) {
+                let prefix = account.klinik_id === null ? '[G] ' : '';
+                return {
+                    id: account.id,
+                    text: `${prefix}${account.kode_akun} - ${account.nama_akun}`
+                };
+            })
+        }).val(null).trigger('change');
+    }
+
+    // Fungsi hitung total
+    function calculateTotals() {
+         let totalDebit = 0; let totalKredit = 0;
+         $('#journal-details-body tr').each(function() {
+             totalDebit += parseFloat($(this).find('.input-debit').val()) || 0;
+             totalKredit += parseFloat($(this).find('.input-kredit').val()) || 0;
+         });
+         let formatter = new Intl.NumberFormat('id-ID');
+         $('#total-debit').text(formatter.format(totalDebit));
+         $('#total-kredit').text(formatter.format(totalKredit));
+         let selisih = totalDebit - totalKredit;
+         $('#total-selisih').text(formatter.format(selisih));
+         if (Math.abs(selisih) > 0.001) { $('#total-selisih').removeClass('text-success').addClass('text-danger'); }
+         else { $('#total-selisih').removeClass('text-danger').addClass('text-success'); }
+     }
+
+     // Fungsi tambah baris
+     function addRow(detail = null) {
+         let currentAccounts = dynamicAccounts; // Gunakan akun dinamis saat menambah baris
+         let newRow = `
+             <tr data-row-id="${rowIndex}">
+                 <td><select class="form-control select2-akun" name="details[${rowIndex}][chart_of_account_id]" required></select></td>
+                 <td><input type="number" class="form-control input-debit" name="details[${rowIndex}][debit]" value="${detail ? parseFloat(detail.debit).toFixed(2) : '0.00'}" min="0" step="0.01" required></td>
+                 <td><input type="number" class="form-control input-kredit" name="details[${rowIndex}][kredit]" value="${detail ? parseFloat(detail.kredit).toFixed(2) : '0.00'}" min="0" step="0.01" required></td>
+                 <td><button type="button" class="btn btn-sm btn-danger btn-remove-row"><i class="fas fa-trash"></i></button></td>
+             </tr>
+         `;
+         $('#journal-details-body').append(newRow);
+         let selectEl = $(`tr[data-row-id="${rowIndex}"] .select2-akun`);
+         initializeSelect2(selectEl, currentAccounts); // Kirim akun saat ini
+         if (detail) {
+             selectEl.val(detail.chart_of_account_id).trigger('change');
+         }
+         rowIndex++;
+     }
+
+    // --- Kode yang berjalan saat dokumen siap ---
     $(function() {
-        // 1. Inisialisasi Select2
-        // Kita simpan daftar akun dalam variabel JS untuk digunakan nanti
-        const accounts = @json($accounts);
-        
-        function initializeSelect2(element) {
-            $(element).select2({
-                theme: 'bootstrap4',
-                placeholder: '-- Pilih Akun --',
-                data: accounts.map(function(account) {
-                    return {
-                        id: account.id,
-                        text: `${account.kode_akun} - ${account.nama_akun}`
-                    };
-                })
-            }).val(null).trigger('change');
-        }
+        // Init Select2 for Klinik dropdown (jika ada)
+        $('#klinik_id.select2bs4').select2({ theme: 'bootstrap4' });
 
-        // 2. Fungsi untuk Menghitung Total
-        function calculateTotals() {
-            let totalDebit = 0;
-            let totalKredit = 0;
+        // Event Listeners
+        $('#add-row').on('click', function() { addRow(); });
 
-            $('#journal-details-body tr').each(function() {
-                let debit = parseFloat($(this).find('.input-debit').val()) || 0;
-                let kredit = parseFloat($(this).find('.input-kredit').val()) || 0;
-                totalDebit += debit;
-                totalKredit += kredit;
-            });
-
-            // Format sebagai mata uang (Rupiah)
-            let formatter = new Intl.NumberFormat('id-ID');
-            $('#total-debit').text(formatter.format(totalDebit));
-            $('#total-kredit').text(formatter.format(totalKredit));
-
-            let selisih = totalDebit - totalKredit;
-            $('#total-selisih').text(formatter.format(selisih));
-
-            // Beri warna jika tidak balance
-            if (selisih !== 0) {
-                $('#total-selisih').removeClass('text-success').addClass('text-danger');
-            } else {
-                $('#total-selisih').removeClass('text-danger').addClass('text-success');
-            }
-        }
-
-        // 3. Fungsi untuk Menambah Baris Baru
-        let rowIndex = 0;
-        function addRow() {
-            let newRow = `
-                <tr data-row-id="${rowIndex}">
-                    <td>
-                        <select class="form-control select2-akun" name="details[${rowIndex}][chart_of_account_id]" required>
-                            {{-- Options akan diisi oleh initializeSelect2 --}}
-                        </select>
-                    </td>
-                    <td>
-                        <input type="number" class="form-control input-debit" name="details[${rowIndex}][debit]" value="0" min="0" step="0.01" required>
-                    </td>
-                    <td>
-                        <input type="number" class="form-control input-kredit" name="details[${rowIndex}][kredit]" value="0" min="0" step="0.01" required>
-                    </td>
-                    <td>
-                        <button type="button" class="btn btn-sm btn-danger btn-remove-row">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </td>
-                </tr>
-            `;
-            $('#journal-details-body').append(newRow);
-            
-            // Inisialisasi Select2 pada baris yang baru ditambahkan
-            initializeSelect2(`tr[data-row-id="${rowIndex}"] .select2-akun`);
-            
-            rowIndex++;
-        }
-
-        // 4. Event Listeners
-        
-        // Tambah baris saat tombol #add-row diklik
-        $('#add-row').on('click', function() {
-            addRow();
-        });
-
-        // Hapus baris saat tombol .btn-remove-row diklik
         $('#journal-details-body').on('click', '.btn-remove-row', function() {
             $(this).closest('tr').remove();
-            calculateTotals(); // Hitung ulang total setelah baris dihapus
-        });
-
-        // Hitung ulang total saat nilai debit/kredit berubah
-        $('#journal-details-body').on('input', '.input-debit, .input-kredit', function() {
             calculateTotals();
         });
 
-        // Validasi sebelum submit form
-        $('#form-jurnal').on('submit', function(e) {
-            let totalDebit = 0;
-            let totalKredit = 0;
+        $('#journal-details-body').on('input', '.input-debit, .input-kredit', function() {
+            let row = $(this).closest('tr');
+            let debitInput = row.find('.input-debit');
+            let kreditInput = row.find('.input-kredit');
+            if ($(this).hasClass('input-debit') && parseFloat($(this).val()) > 0) {
+                kreditInput.val('0.00');
+            } else if ($(this).hasClass('input-kredit') && parseFloat($(this).val()) > 0) {
+                debitInput.val('0.00');
+            }
+            calculateTotals();
+         });
 
-            $('#journal-details-body tr').each(function() {
+        $('#form-jurnal').on('submit', function(e) { /* ... validasi balance ... */
+            let totalDebit = 0; let totalKredit = 0; let hasDetails = false;
+             $('#journal-details-body tr').each(function() {
+                 hasDetails = true;
                 totalDebit += parseFloat($(this).find('.input-debit').val()) || 0;
                 totalKredit += parseFloat($(this).find('.input-kredit').val()) || 0;
             });
-            
-            // Cek apakah ada baris detail
-            if (totalDebit === 0 && totalKredit === 0) {
-                e.preventDefault(); // Hentikan submit
-                toastr.error('Jurnal harus memiliki setidaknya satu entri debit atau kredit.');
-                return;
+             if (!hasDetails) { e.preventDefault(); toastr.error('Jurnal harus memiliki detail.'); return; }
+            if (totalDebit === 0 && totalKredit === 0) { e.preventDefault(); toastr.error('Jurnal harus ada nilai.'); return; }
+            if (Math.abs(totalDebit - totalKredit) > 0.001) { e.preventDefault(); toastr.error('Jurnal tidak seimbang.'); }
+         });
+
+        // Add initial rows
+        addRow();
+        addRow();
+
+        // --- AJAX UNTUK SUPERADMIN ---
+        @role('Superadmin')
+        $('#klinik_id').on('change', function() {
+            let selectedKlinikId = $(this).val();
+            let url = "{{ route('ajax.getAccountsByKlinik') }}";
+
+            // Tambahkan klinik_id ke URL jika ada, jika tidak, route akan ambil global saja
+            if (selectedKlinikId) {
+                url = url + '/' + selectedKlinikId;
             }
 
-            // Cek apakah balance
-            if (totalDebit !== totalKredit) {
-                e.preventDefault(); // Hentikan submit
-                toastr.error('Jurnal tidak seimbang (unbalanced). Total Debit harus sama dengan Total Kredit.');
-            }
+            // Tampilkan loading
+            $('.select2-akun').prop('disabled', true).empty().append(new Option('Memuat Akun...', '', true, true)).trigger('change');
+
+            $.ajax({
+                url: url,
+                method: 'GET',
+                success: function(data) {
+                    dynamicAccounts = data; // Update akun dinamis
+                    // Update semua dropdown akun yang sudah ada
+                    $('.select2-akun').each(function() {
+                        // Simpan value lama jika ada
+                        let oldValue = $(this).val();
+                        initializeSelect2(this, dynamicAccounts);
+                        // Coba set value lama kembali (jika masih valid di daftar baru)
+                        $(this).val(oldValue).trigger('change.select2');
+                        $(this).prop('disabled', false);
+                    });
+                    // Reset total karena akun mungkin berubah
+                    calculateTotals();
+                },
+                error: function(jqXHR, textStatus, errorThrown) {
+                    console.error("AJAX Error:", textStatus, errorThrown);
+                    toastr.error('Gagal memuat daftar akun untuk klinik ini.');
+                    // Kembalikan ke initialAccounts jika gagal
+                    dynamicAccounts = initialAccounts;
+                    $('.select2-akun').each(function() {
+                        initializeSelect2(this, initialAccounts);
+                        $(this).prop('disabled', false);
+                    });
+                     calculateTotals(); // Hitung ulang total
+                }
+            });
         });
+        @endrole
+        // --- AKHIR AJAX ---
 
-        // 5. Tambahkan dua baris pertama saat halaman dimuat
-        addRow();
-        addRow();
-    });
+    }); // Akhir $(function() {})
 </script>
 @endpush

@@ -6,352 +6,464 @@ use Illuminate\Http\Request;
 use App\Models\ChartOfAccount;
 use App\Models\JurnalDetail;
 use App\Models\Jurnal;
+use App\Models\Klinik; // Pastikan ini ada
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon; // <-- Pastikan ini ada
+use Carbon\Carbon;
+use Illuminate\Support\Facades\Auth; // Pastikan ini ada
 
 class LaporanController extends Controller
 {
     /**
      * Menampilkan halaman filter dan laporan Buku Besar.
+     * Disesuaikan untuk filter klinik berdasarkan role.
      */
     public function bukuBesar(Request $request)
     {
-        // 1. Ambil semua akun untuk dropdown filter
+        $user = Auth::user();
         $accounts = ChartOfAccount::orderBy('kode_akun', 'asc')->get();
 
-        // 2. Siapkan variabel
+        // Ambil klinik yang relevan untuk filter
+        $kliniks = collect();
+        if ($user->hasRole('Superadmin')) {
+            $kliniks = Klinik::where('is_active', true)->orderBy('nama_klinik', 'asc')->get();
+        } elseif ($user->klinik_id) {
+            $kliniks = Klinik::where('id', $user->klinik_id)->get();
+        }
+
+        // Siapkan variabel
         $data = collect();
         $saldoAwal = 0;
         $akunDipilih = null;
-        // Ambil filter dari request, atau set default jika tidak ada
+        $klinikDipilih = null;
+
+        // Tentukan Klinik ID yang akan difilter
+        $klinikIdFilter = null;
+        if ($user->hasRole('Superadmin')) {
+            $klinikIdFilter = $request->input('klinik_id');
+        } else {
+            // Admin Klinik & Staf otomatis pakai klinik ID mereka
+            // (Tidak perlu filter dari request)
+            $klinikIdFilter = $user->klinik_id;
+            // Jika Admin/Staf tidak punya klinik, tampilkan error di view
+             if (!$klinikIdFilter) {
+                 return view('laporan.buku-besar', [
+                     'accounts' => $accounts,
+                     'kliniks' => $kliniks,
+                     'data' => $data,
+                     'saldoAwal' => $saldoAwal,
+                     'akunDipilih' => $akunDipilih,
+                     'klinikDipilih' => $klinikDipilih,
+                     'startDate' => $request->input('start_date', date('Y-m-01')),
+                     'endDate' => $request->input('end_date', date('Y-m-t')),
+                     'klinikIdFilter' => null,
+                     'akunIdFilter' => $request->input('akun_id'),
+                     'error' => 'Akun Anda belum terhubung ke klinik.'
+                 ]);
+             }
+        }
+
+        // Ambil filter lain dari request
         $startDate = $request->input('start_date', date('Y-m-01'));
         $endDate = $request->input('end_date', date('Y-m-t'));
+        $akunIdFilter = $request->input('akun_id');
 
-        // 3. Cek jika user sudah melakukan filter (mengirim 'akun_id')
-        if ($request->filled('akun_id')) {
-            $akun_id = $request->input('akun_id');
-            $akunDipilih = ChartOfAccount::find($akun_id);
+        // --- Proses HANYA JIKA klinik dan akun sudah dipilih/ditentukan ---
+        if ($klinikIdFilter && $akunIdFilter) {
+            $akunDipilih = ChartOfAccount::find($akunIdFilter);
+            $klinikDipilih = Klinik::find($klinikIdFilter);
 
-            // --- HITUNG SALDO AWAL (Opening Balance) ---
-            // Ambil total debit & kredit SEBELUM start_date
-            $saldoAwalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $akun_id)
-                ->where('jurnals.tanggal_transaksi', '<', $startDate)
-                ->sum('jurnal_details.debit');
-                
-            $saldoAwalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $akun_id)
-                ->where('jurnals.tanggal_transaksi', '<', $startDate)
-                ->sum('jurnal_details.kredit');
+            if (!$akunDipilih || !$klinikDipilih) {
+                 $akunDipilih = null;
+                 $klinikDipilih = null;
+                 $data = collect();
+                 // Tambahkan pesan error jika perlu
+            } else {
+                // --- HITUNG SALDO AWAL ---
+                $saldoAwalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
+                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
+                    ->where('jurnals.tanggal_transaksi', '<', $startDate)
+                    ->sum('jurnal_details.debit');
 
-            // Hitung saldo awal bersih berdasarkan saldo normal akun
-            if ($akunDipilih->saldo_normal == 'Debit') {
-                $saldoAwal = $saldoAwalDebits - $saldoAwalKredits;
-            } else { // Saldo normal 'Kredit'
-                $saldoAwal = $saldoAwalKredits - $saldoAwalDebits;
+                $saldoAwalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
+                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
+                    ->where('jurnals.tanggal_transaksi', '<', $startDate)
+                    ->sum('jurnal_details.kredit');
+
+                $saldoAwal = ($akunDipilih->saldo_normal == 'Debit')
+                           ? ($saldoAwalDebits - $saldoAwalKredits)
+                           : ($saldoAwalKredits - $saldoAwalDebits);
+
+                // --- AMBIL MUTASI TRANSAKSI ---
+                $data = JurnalDetail::with('jurnal')
+                    ->join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+                    ->where('jurnal_details.chart_of_account_id', $akunIdFilter)
+                    ->where('jurnals.klinik_id', $klinikIdFilter) // Filter klinik
+                    ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
+                    ->orderBy('jurnals.tanggal_transaksi', 'asc')
+                    ->orderBy('jurnals.id', 'asc')
+                    ->select('jurnal_details.*')
+                    ->get();
             }
-
-            // --- AMBIL MUTASI TRANSAKSI ---
-            // Ambil semua detail jurnal PADA rentang tanggal
-            $data = JurnalDetail::with('jurnal') // Eager load data jurnal (induk)
-                ->join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $akun_id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->orderBy('jurnals.tanggal_transaksi', 'asc') // Urutkan berdasarkan tanggal
-                ->orderBy('jurnals.id', 'asc') // Jika tanggal sama, urutkan berdasarkan ID
-                ->select('jurnal_details.*') // Ambil semua dari jurnal_details
-                ->get();
         }
-        
-        // 4. Kirim data ke view
+
+        // Kirim data ke view
         return view('laporan.buku-besar', compact(
             'accounts',
+            'kliniks',
             'data',
             'saldoAwal',
             'akunDipilih',
-            'startDate', // Kirim tanggal filter kembali ke view
-            'endDate'    // Kirim tanggal filter kembali ke view
+            'klinikDipilih',
+            'startDate',
+            'endDate',
+            'klinikIdFilter', // Kirim ID klinik yang difilter (untuk selected di view)
+            'akunIdFilter'    // Kirim ID akun yang difilter (untuk selected di view)
         ));
     }
+
+    /**
+     * Menampilkan laporan Neraca Saldo.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     */
     public function neracaSaldo(Request $request)
     {
-        // 1. Ambil filter tanggal. Defaultnya adalah akhir bulan ini.
-        //    Tidak seperti Buku Besar, Neraca Saldo hanya butuh 1 tanggal (Tanggal Akhir).
-        $endDate = $request->input('end_date', date('Y-m-t'));
+        $user = Auth::user();
 
-        // 2. Ambil semua akun
-        $accounts = ChartOfAccount::orderBy('kode_akun', 'asc')->get();
+        // Ambil klinik yang relevan untuk filter
+        $kliniks = collect();
+        if ($user->hasRole('Superadmin')) {
+            $kliniks = Klinik::where('is_active', true)->orderBy('nama_klinik', 'asc')->get();
+        } elseif ($user->klinik_id) {
+            $kliniks = Klinik::where('id', $user->klinik_id)->get();
+        }
+
+        // Tentukan Klinik ID yang akan difilter
+        $klinikIdFilter = null;
+        if ($user->hasRole('Superadmin')) {
+            $klinikIdFilter = $request->input('klinik_id');
+        } else {
+            $klinikIdFilter = $user->klinik_id;
+            // Jika Admin/Staf tidak punya klinik, tampilkan error
+            if (!$klinikIdFilter) {
+                return view('laporan.neraca-saldo', [
+                    'kliniks' => $kliniks,
+                    'laporanData' => [],
+                    'totalDebit' => 0, 'totalKredit' => 0,
+                    'endDate' => $request->input('end_date', date('Y-m-t')),
+                    'klinikDipilih' => null, 'klinikIdFilter' => null,
+                    'error' => 'Akun Anda belum terhubung ke klinik.'
+                ]);
+            }
+        }
+
+        $endDate = $request->input('end_date', date('Y-m-t'));
+        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
 
         $laporanData = [];
         $totalDebit = 0;
         $totalKredit = 0;
 
-        // 3. Loop setiap akun untuk menghitung saldo akhirnya
-        foreach ($accounts as $account) {
-            // Ambil total debit dan kredit untuk akun ini, dari awal s/d end_date
-            $totalDebitsForAccount = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->where('jurnals.tanggal_transaksi', '<=', $endDate)
-                ->sum('jurnal_details.debit');
-                
-            $totalKreditsForAccount = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->where('jurnals.tanggal_transaksi', '<=', $endDate)
-                ->sum('jurnal_details.kredit');
+        // Hanya proses jika klinik sudah dipilih/ditentukan
+        if ($klinikIdFilter) {
+            // Ambil akun global DAN akun spesifik klinik yang dipilih
+            $accounts = ChartOfAccount::whereNull('klinik_id')
+                            ->orWhere('klinik_id', $klinikIdFilter)
+                            ->orderBy('kode_akun', 'asc')
+                            ->get();
 
-            // Hitung saldo bersih
-            $saldo = 0;
-            $saldoDebit = 0;
-            $saldoKredit = 0;
+            foreach ($accounts as $account) {
+                // Hitung saldo HANYA untuk klinik yang dipilih
+                // (Fungsi hitungSaldoAkun sudah diupdate sebelumnya untuk menerima klinik_id)
+                $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
 
-            if ($account->saldo_normal == 'Debit') {
-                $saldo = $totalDebitsForAccount - $totalKreditsForAccount;
-            } else { // Saldo normal 'Kredit'
-                $saldo = $totalKreditsForAccount - $totalDebitsForAccount;
-            }
+                // Tampilkan hanya jika saldo tidak nol
+                if (round($saldo, 2) != 0) { // Gunakan round untuk presisi
+                    $saldoDebit = ($account->saldo_normal == 'Debit') ? $saldo : 0;
+                    $saldoKredit = ($account->saldo_normal == 'Kredit') ? $saldo : 0;
 
-            // Hanya tampilkan jika saldonya tidak nol
-            if ($saldo != 0) {
-                // Masukkan ke kolom Debit atau Kredit berdasarkan saldo normal
-                if ($account->saldo_normal == 'Debit') {
-                    $saldoDebit = $saldo;
-                    $totalDebit += $saldo;
-                } else {
-                    $saldoKredit = $saldo;
-                    $totalKredit += $saldo;
+                    $totalDebit += $saldoDebit;
+                    $totalKredit += $saldoKredit;
+
+                    $laporanData[] = [
+                        'kode_akun' => $account->kode_akun,
+                        'nama_akun' => $account->nama_akun,
+                        'debit' => $saldoDebit,
+                        'kredit' => $saldoKredit,
+                    ];
                 }
-                
-                $laporanData[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'debit' => $saldoDebit,
-                    'kredit' => $saldoKredit,
-                ];
             }
         }
-        
-        // 4. Kirim data ke view
+
         return view('laporan.neraca-saldo', compact(
+            'kliniks',
             'laporanData',
             'totalDebit',
             'totalKredit',
-            'endDate'
+            'endDate',
+            'klinikDipilih',
+            'klinikIdFilter' // Kirim untuk selected filter
         ));
     }
+
+    /**
+     * Menampilkan laporan Laba Rugi.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     */
     public function labaRugi(Request $request)
     {
-        // 1. Ambil filter tanggal. Defaultnya adalah bulan ini.
+        $user = Auth::user();
+
+        // Ambil klinik yang relevan
+        $kliniks = collect();
+        if ($user->hasRole('Superadmin')) {
+            $kliniks = Klinik::where('is_active', true)->orderBy('nama_klinik', 'asc')->get();
+        } elseif ($user->klinik_id) {
+            $kliniks = Klinik::where('id', $user->klinik_id)->get();
+        }
+
+        // Tentukan Klinik ID
+        $klinikIdFilter = null;
+        if ($user->hasRole('Superadmin')) {
+            $klinikIdFilter = $request->input('klinik_id');
+        } else {
+            $klinikIdFilter = $user->klinik_id;
+             if (!$klinikIdFilter) {
+                 return view('laporan.laba-rugi', [
+                     'kliniks' => $kliniks, 'listPendapatan' => [], 'listBiaya' => [],
+                     'totalPendapatan' => 0, 'totalBiaya' => 0, 'labaRugi' => 0,
+                     'startDate' => $request->input('start_date', date('Y-m-01')),
+                     'endDate' => $request->input('end_date', date('Y-m-t')),
+                     'klinikDipilih' => null, 'klinikIdFilter' => null,
+                     'error' => 'Akun Anda belum terhubung ke klinik.'
+                 ]);
+             }
+        }
+
         $startDate = $request->input('start_date', date('Y-m-01'));
         $endDate = $request->input('end_date', date('Y-m-t'));
+        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
 
-        // 2. Siapkan variabel
         $listPendapatan = [];
         $listBiaya = [];
         $totalPendapatan = 0;
         $totalBiaya = 0;
+        $labaRugi = 0;
 
-        // 3. Ambil semua akun PENDAPATAN
-        $pendapatanAccounts = ChartOfAccount::where('tipe_akun', 'Pendapatan')
-                                            ->orderBy('kode_akun', 'asc')->get();
-        
-        foreach ($pendapatanAccounts as $account) {
-            // Hitung total transaksi (mutasi) HANYA pada rentang tanggal
-            $totalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.debit');
-                
-            $totalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.kredit');
+        // Hanya proses jika klinik sudah dipilih/ditentukan
+        if ($klinikIdFilter) {
+            // Ambil akun global DAN akun spesifik klinik
+             $pendapatanAccounts = ChartOfAccount::where('tipe_akun', 'Pendapatan')
+                                                ->where(function($q) use ($klinikIdFilter){
+                                                     $q->whereNull('klinik_id')
+                                                       ->orWhere('klinik_id', $klinikIdFilter);
+                                                })
+                                                ->orderBy('kode_akun', 'asc')->get();
 
-            // Pendapatan saldo normalnya di KREDIT
-            $saldo = $totalKredits - $totalDebits;
-
-            if ($saldo != 0) {
-                $listPendapatan[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'total' => $saldo
-                ];
-                $totalPendapatan += $saldo;
+            foreach ($pendapatanAccounts as $account) {
+                // Gunakan fungsi helper hitungMutasiAkun (sudah diupdate)
+                $saldo = $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikIdFilter);
+                if ($saldo != 0) {
+                    $listPendapatan[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                    $totalPendapatan += $saldo;
+                }
             }
+
+            // Ambil akun global DAN akun spesifik klinik
+             $biayaAccounts = ChartOfAccount::where('tipe_akun', 'Biaya')
+                                           ->where(function($q) use ($klinikIdFilter){
+                                                $q->whereNull('klinik_id')
+                                                  ->orWhere('klinik_id', $klinikIdFilter);
+                                           })
+                                           ->orderBy('kode_akun', 'asc')->get();
+            foreach ($biayaAccounts as $account) {
+                 // Gunakan fungsi helper hitungMutasiAkun (sudah diupdate)
+                $saldo = $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikIdFilter);
+                if ($saldo != 0) {
+                    $listBiaya[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                    $totalBiaya += $saldo;
+                }
+            }
+            $labaRugi = $totalPendapatan - $totalBiaya;
         }
 
-        // 4. Ambil semua akun BIAYA
-        $biayaAccounts = ChartOfAccount::where('tipe_akun', 'Biaya')
-                                       ->orderBy('kode_akun', 'asc')->get();
-
-        foreach ($biayaAccounts as $account) {
-            // Hitung total transaksi (mutasi) HANYA pada rentang tanggal
-            $totalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.debit');
-                
-            $totalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.kredit');
-
-            // Biaya saldo normalnya di DEBIT
-            $saldo = $totalDebits - $totalKredits;
-
-            if ($saldo != 0) {
-                $listBiaya[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'total' => $saldo
-                ];
-                $totalBiaya += $saldo;
-            }
-        }
-        
-        // 5. Hitung Laba/Rugi Bersih
-        $labaRugi = $totalPendapatan - $totalBiaya;
-
-        // 6. Kirim data ke view
         return view('laporan.laba-rugi', compact(
-            'listPendapatan',
-            'listBiaya',
-            'totalPendapatan',
-            'totalBiaya',
+            'kliniks',
+            'listPendapatan', 'listBiaya',
+            'totalPendapatan', 'totalBiaya',
             'labaRugi',
-            'startDate',
-            'endDate'
+            'startDate', 'endDate',
+            'klinikDipilih', 'klinikIdFilter' // Kirim untuk view
         ));
     }
+
+    // Pastikan fungsi helper hitungMutasiAkun sudah ada
+    /**
+      * Fungsi helper untuk menghitung MUTASI akun pada rentang tanggal dan klinik tertentu.
+      */
+     private function hitungMutasiAkun($account, $startDate, $endDate, $klinikId)
+     {
+         $query = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+             ->where('jurnal_details.chart_of_account_id', $account->id)
+             ->where('jurnals.klinik_id', $klinikId) // Filter Klinik
+             ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate]); // Filter Rentang
+
+         $totalDebits = (clone $query)->sum('jurnal_details.debit');
+         $totalKredits = $query->sum('jurnal_details.kredit');
+
+         return ($account->saldo_normal == 'Debit')
+                ? ($totalDebits - $totalKredits)
+                // Pendapatan saldo normal kredit, Biaya saldo normal debit
+                : ($totalKredits - $totalDebits);
+     }
+
+    /**
+     * Menampilkan laporan Neraca.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     */
     public function neraca(Request $request)
     {
-        // 1. Ambil filter tanggal. Defaultnya adalah akhir bulan ini.
+        $user = Auth::user();
+
+        // Ambil klinik yang relevan
+        $kliniks = collect();
+        if ($user->hasRole('Superadmin')) {
+            $kliniks = Klinik::where('is_active', true)->orderBy('nama_klinik', 'asc')->get();
+        } elseif ($user->klinik_id) {
+            $kliniks = Klinik::where('id', $user->klinik_id)->get();
+        }
+
+        // Tentukan Klinik ID
+        $klinikIdFilter = null;
+        if ($user->hasRole('Superadmin')) {
+            $klinikIdFilter = $request->input('klinik_id');
+        } else {
+            $klinikIdFilter = $user->klinik_id;
+             if (!$klinikIdFilter) {
+                 return view('laporan.neraca', [
+                     'kliniks' => $kliniks, 'listAset' => [], 'totalAset' => 0,
+                     'listLiabilitas' => [], 'totalLiabilitas' => 0, 'listEkuitas' => [], 'totalEkuitas' => 0,
+                     'labaRugiBerjalan' => 0, 'totalLiabilitasDanEkuitas' => 0,
+                     'endDate' => $request->input('end_date', date('Y-m-t')),
+                     'klinikDipilih' => null, 'klinikIdFilter' => null,
+                     'error' => 'Akun Anda belum terhubung ke klinik.'
+                 ]);
+             }
+        }
+
         $endDate = $request->input('end_date', date('Y-m-t'));
-        // Tentukan tanggal awal tahun (untuk menghitung Laba Rugi Berjalan)
+        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
         $yearStartDate = Carbon::parse($endDate)->startOfYear()->format('Y-m-d');
 
-        // --- A. KELOMPOK ASET ---
-        $listAset = [];
-        $totalAset = 0;
-        $asetAccounts = ChartOfAccount::where('tipe_akun', 'Aset')->orderBy('kode_akun', 'asc')->get();
+        $listAset = []; $totalAset = 0;
+        $listLiabilitas = []; $totalLiabilitas = 0;
+        $listEkuitas = []; $totalEkuitas = 0;
+        $labaRugiBerjalan = 0;
+        $totalLiabilitasDanEkuitas = 0;
 
-        foreach ($asetAccounts as $account) {
-            $saldo = $this->hitungSaldoAkun($account, $endDate);
-            if ($saldo != 0) {
-                $listAset[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'total' => $saldo
-                ];
-                $totalAset += $saldo;
+        // Hanya proses jika klinik sudah dipilih/ditentukan
+        if ($klinikIdFilter) {
+            // Aset (Global + Spesifik Klinik)
+             $asetAccounts = ChartOfAccount::where('tipe_akun', 'Aset')
+                                          ->where(function($q) use ($klinikIdFilter){
+                                               $q->whereNull('klinik_id')
+                                                 ->orWhere('klinik_id', $klinikIdFilter);
+                                          })
+                                          ->orderBy('kode_akun', 'asc')->get();
+            foreach ($asetAccounts as $account) {
+                // Gunakan fungsi helper hitungSaldoAkun (sudah diupdate)
+                $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+                if ($saldo != 0) {
+                    $listAset[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                    $totalAset += $saldo;
+                }
             }
+
+            // Liabilitas (Global + Spesifik Klinik)
+             $liabilitasAccounts = ChartOfAccount::where('tipe_akun', 'Liabilitas')
+                                                ->where(function($q) use ($klinikIdFilter){
+                                                     $q->whereNull('klinik_id')
+                                                       ->orWhere('klinik_id', $klinikIdFilter);
+                                                })
+                                                ->orderBy('kode_akun', 'asc')->get();
+            foreach ($liabilitasAccounts as $account) {
+                $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+                if ($saldo != 0) {
+                    $listLiabilitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                    $totalLiabilitas += $saldo;
+                }
+            }
+
+            // Ekuitas (Global + Spesifik Klinik)
+             $ekuitasAccounts = ChartOfAccount::where('tipe_akun', 'Ekuitas')
+                                              ->where(function($q) use ($klinikIdFilter){
+                                                   $q->whereNull('klinik_id')
+                                                     ->orWhere('klinik_id', $klinikIdFilter);
+                                              })
+                                              ->orderBy('kode_akun', 'asc')->get();
+            foreach ($ekuitasAccounts as $account) {
+                $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+                if ($saldo != 0) {
+                    $listEkuitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                    $totalEkuitas += $saldo;
+                }
+            }
+
+            // Laba Rugi Berjalan (dari awal tahun s/d end date, untuk klinik ini)
+            // Gunakan fungsi helper hitungLabaRugi (sudah diupdate)
+            $labaRugiBerjalan = $this->hitungLabaRugi($yearStartDate, $endDate, $klinikIdFilter);
+
+            $totalEkuitas += $labaRugiBerjalan; // Tambahkan Laba Rugi Berjalan ke Ekuitas
+            $totalLiabilitasDanEkuitas = $totalLiabilitas + $totalEkuitas;
         }
 
-        // --- B. KELOMPOK LIABILITAS ---
-        $listLiabilitas = [];
-        $totalLiabilitas = 0;
-        $liabilitasAccounts = ChartOfAccount::where('tipe_akun', 'Liabilitas')->orderBy('kode_akun', 'asc')->get();
-
-        foreach ($liabilitasAccounts as $account) {
-            $saldo = $this->hitungSaldoAkun($account, $endDate);
-            if ($saldo != 0) {
-                $listLiabilitas[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'total' => $saldo
-                ];
-                $totalLiabilitas += $saldo;
-            }
-        }
-
-        // --- C. KELOMPOK EKUITAS ---
-        $listEkuitas = [];
-        $totalEkuitas = 0;
-        $ekuitasAccounts = ChartOfAccount::where('tipe_akun', 'Ekuitas')->orderBy('kode_akun', 'asc')->get();
-
-        foreach ($ekuitasAccounts as $account) {
-            $saldo = $this->hitungSaldoAkun($account, $endDate);
-            if ($saldo != 0) {
-                $listEkuitas[] = [
-                    'kode_akun' => $account->kode_akun,
-                    'nama_akun' => $account->nama_akun,
-                    'total' => $saldo
-                ];
-                $totalEkuitas += $saldo;
-            }
-        }
-        
-        // --- D. LABA RUGI BERJALAN (Current Year's Net Income) ---
-        // Kita hitung Laba Rugi dari Awal Tahun s/d Tanggal Laporan
-        $labaRugiBerjalan = $this->hitungLabaRugi($yearStartDate, $endDate);
-        
-        // Tambahkan Laba Rugi Berjalan ke Total Ekuitas
-        $totalEkuitas += $labaRugiBerjalan;
-        $totalLiabilitasDanEkuitas = $totalLiabilitas + $totalEkuitas;
-        
-        // 6. Kirim data ke view
         return view('laporan.neraca', compact(
+            'kliniks',
             'listAset', 'totalAset',
             'listLiabilitas', 'totalLiabilitas',
             'listEkuitas', 'totalEkuitas',
             'labaRugiBerjalan',
             'totalLiabilitasDanEkuitas',
-            'endDate'
+            'endDate',
+            'klinikDipilih', 'klinikIdFilter' // Kirim untuk view
         ));
     }
 
     /**
-     * Fungsi helper untuk menghitung saldo akhir sebuah akun s/d tanggal tertentu.
+     * Fungsi helper untuk menghitung saldo akhir sebuah akun s/d tanggal tertentu
+     * DITAMBAHKAN filter $klinikId.
      */
-    private function hitungSaldoAkun($account, $endDate)
+    private function hitungSaldoAkun($account, $endDate, $klinikId)
     {
-        $totalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
+        $query = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
             ->where('jurnal_details.chart_of_account_id', $account->id)
-            ->where('jurnals.tanggal_transaksi', '<=', $endDate)
-            ->sum('jurnal_details.debit');
-            
-        $totalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-            ->where('jurnal_details.chart_of_account_id', $account->id)
-            ->where('jurnals.tanggal_transaksi', '<=', $endDate)
-            ->sum('jurnal_details.kredit');
+            ->where('jurnals.klinik_id', $klinikId) // <-- Filter Klinik
+            ->where('jurnals.tanggal_transaksi', '<=', $endDate);
 
-        if ($account->saldo_normal == 'Debit') {
-            return $totalDebits - $totalKredits;
-        } else { // Saldo normal 'Kredit'
-            return $totalKredits - $totalDebits;
-        }
+        $totalDebits = (clone $query)->sum('jurnal_details.debit');
+        $totalKredits = $query->sum('jurnal_details.kredit');
+
+        return ($account->saldo_normal == 'Debit')
+               ? ($totalDebits - $totalKredits)
+               : ($totalKredits - $totalDebits);
     }
 
-    /**
-     * Fungsi helper untuk menghitung Laba Rugi pada rentang tanggal tertentu.
-     */
-    private function hitungLabaRugi($startDate, $endDate)
+
+    private function hitungLabaRugi($startDate, $endDate, $klinikId)
     {
         $totalPendapatan = 0;
         $pendapatanAccounts = ChartOfAccount::where('tipe_akun', 'Pendapatan')->get();
         foreach ($pendapatanAccounts as $account) {
-            $totalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.debit');
-            $totalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.kredit');
-            $totalPendapatan += ($totalKredits - $totalDebits); // Saldo normal Kredit
+            // Gunakan fungsi hitungMutasiAkun
+            $totalPendapatan += $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikId);
         }
 
         $totalBiaya = 0;
         $biayaAccounts = ChartOfAccount::where('tipe_akun', 'Biaya')->get();
         foreach ($biayaAccounts as $account) {
-            $totalDebits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.debit');
-            $totalKredits = JurnalDetail::join('jurnals', 'jurnal_details.jurnal_id', '=', 'jurnals.id')
-                ->where('jurnal_details.chart_of_account_id', $account->id)
-                ->whereBetween('jurnals.tanggal_transaksi', [$startDate, $endDate])
-                ->sum('jurnal_details.kredit');
-            $totalBiaya += ($totalDebits - $totalKredits); // Saldo normal Debit
+            // Gunakan fungsi hitungMutasiAkun
+            $totalBiaya += $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikId);
         }
 
         return $totalPendapatan - $totalBiaya;

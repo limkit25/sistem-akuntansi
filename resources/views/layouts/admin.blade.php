@@ -162,7 +162,7 @@
         </section>
         </div>
     <footer class="main-footer">
-        <strong>Copyright &copy; 2024-{{ date('Y') }} <a href="#">Sistem Akuntansi</a>.</strong> All rights reserved.
+        <strong>Copyright &copy;{{ date('Y') }} <a href="#">Heru Sartono</a>.</strong> All rights reserved.
     </footer>
 
 </div>

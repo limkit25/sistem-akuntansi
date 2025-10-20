@@ -101,6 +101,10 @@ Route::middleware('auth')->group(function () {
         Route::get('laporan/neraca-saldo', [LaporanController::class, 'neracaSaldo'])->name('laporan.neracaSaldo');
         Route::get('laporan/laba-rugi', [LaporanController::class, 'labaRugi'])->name('laporan.labaRugi');
         Route::get('laporan/neraca', [LaporanController::class, 'neraca'])->name('laporan.neraca');
+        Route::get('laporan/buku-besar/export', [LaporanController::class, 'exportBukuBesar'])->name('laporan.bukuBesar.export');
+        Route::get('laporan/neraca-saldo/export', [LaporanController::class, 'exportNeracaSaldo'])->name('laporan.neracaSaldo.export');
+        Route::get('laporan/laba-rugi/export', [LaporanController::class, 'exportLabaRugi'])->name('laporan.labaRugi.export');
+        Route::get('laporan/neraca/export', [LaporanController::class, 'exportNeraca'])->name('laporan.neraca.export');
     });
 
     // --- GRUP UNTUK SEMUA ROLE (SUPERADMIN, ADMIN, STAF) ---

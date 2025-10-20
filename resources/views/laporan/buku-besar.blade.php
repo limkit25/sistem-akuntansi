@@ -87,6 +87,7 @@
                                     <i class="fas fa-search"></i> Tampilkan
                                 </button>
                             </div>
+
                         </div>
                     </div>
                 </div>
@@ -121,6 +122,23 @@
                     <div class="card-tools">
                         Periode: {{ \Carbon\Carbon::parse($startDate)->format('d M Y') }} s/d {{ \Carbon\Carbon::parse($endDate)->format('d M Y') }}
                     </div>
+                    <div class="btn-group">
+                            {{-- Buat URL export dengan parameter filter saat ini --}}
+                            @php
+                                $exportParams = [
+                                    'klinik_id' => $klinikIdFilter,
+                                    'akun_id' => $akunIdFilter,
+                                    'start_date' => $startDate,
+                                    'end_date' => $endDate,
+                                ];
+                            @endphp
+                            <a href="{{ route('laporan.bukuBesar.export', array_merge($exportParams, ['type' => 'excel'])) }}" class="btn btn-sm btn-success" target="_blank">
+                                <i class="fas fa-file-excel"></i> Export Excel
+                            </a>
+                            <a href="{{ route('laporan.bukuBesar.export', array_merge($exportParams, ['type' => 'pdf'])) }}" class="btn btn-sm btn-danger" target="_blank">
+                                <i class="fas fa-file-pdf"></i> Export PDF
+                            </a>
+                        </div>
                 </div>
                 <div class="card-body p-0">
                      {{-- Tampilkan warning jika akun tidak valid (dari Controller) --}}

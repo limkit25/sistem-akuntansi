@@ -11,7 +11,11 @@ use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth; // Pastikan ini ada
 use app\models\user;
-
+use Maatwebsite\Excel\Facades\Excel; // <-- Tambahkan
+use App\Exports\BukuBesarExport;   // <-- Tambahkan
+use App\Exports\NeracaSaldoExport;
+use App\Exports\LabaRugiExport;
+use App\Exports\NeracaExport;
 
 class LaporanController extends Controller
 {
@@ -139,16 +143,20 @@ class LaporanController extends Controller
             'akunIdFilter'
         ));
     }
+    /**
+     * Menampilkan laporan Neraca Saldo.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     */
     public function neracaSaldo(Request $request)
     {
         $user = Auth::user();
 
-        // Ambil klinik yang relevan untuk filter
+        // Ambil klinik yang relevan
         $kliniks = collect();
         if ($user->hasRole('Superadmin')) {
             $kliniks = Klinik::where('is_active', true)->orderBy('nama_klinik', 'asc')->get();
         } elseif ($user->klinik_id) {
-            $kliniks = Klinik::where('id', $user->klinik_id)->get();
+            $kliniks = Klinik::where('id', $user->klinik_id)->get(); // Hanya klinik user
         }
 
         // Tentukan Klinik ID yang akan difilter
@@ -157,41 +165,41 @@ class LaporanController extends Controller
             $klinikIdFilter = $request->input('klinik_id');
         } else {
             $klinikIdFilter = $user->klinik_id;
-            // Jika Admin/Staf tidak punya klinik, tampilkan error
-            if (!$klinikIdFilter) {
-                return view('laporan.neraca-saldo', [
-                    'kliniks' => $kliniks,
-                    'laporanData' => [],
-                    'totalDebit' => 0, 'totalKredit' => 0,
-                    'endDate' => $request->input('end_date', date('Y-m-t')),
-                    'klinikDipilih' => null, 'klinikIdFilter' => null,
-                    'error' => 'Akun Anda belum terhubung ke klinik.'
-                ]);
+            if (!$klinikIdFilter && !$user->hasRole('Superadmin')) {
+                 return view('laporan.neraca-saldo', [
+                     'kliniks' => $kliniks, 'laporanData' => [],
+                     'totalDebit' => 0, 'totalKredit' => 0,
+                     'endDate' => $request->input('end_date', date('Y-m-t')),
+                     'klinikDipilih' => null, 'klinikIdFilter' => null,
+                     'error' => 'Akun Anda belum terhubung ke klinik.'
+                 ]);
             }
         }
 
         $endDate = $request->input('end_date', date('Y-m-t'));
-        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
+        // Ambil model Klinik jika ID numerik
+        $klinikDipilih = is_numeric($klinikIdFilter) ? Klinik::find($klinikIdFilter) : null;
 
         $laporanData = [];
         $totalDebit = 0;
         $totalKredit = 0;
 
-        // Hanya proses jika klinik sudah dipilih/ditentukan
-        if ($klinikIdFilter) {
+        // Hanya proses jika klinik sudah dipilih/ditentukan (harus numerik ID)
+        if (is_numeric($klinikIdFilter)) {
             // Ambil akun global DAN akun spesifik klinik yang dipilih
-            $accounts = ChartOfAccount::whereNull('klinik_id')
-                            ->orWhere('klinik_id', $klinikIdFilter)
+            $accounts = ChartOfAccount::where(function($query) use ($klinikIdFilter) {
+                                $query->whereNull('klinik_id')
+                                      ->orWhere('klinik_id', $klinikIdFilter);
+                            })
                             ->orderBy('kode_akun', 'asc')
                             ->get();
 
             foreach ($accounts as $account) {
                 // Hitung saldo HANYA untuk klinik yang dipilih
-                // (Fungsi hitungSaldoAkun sudah diupdate sebelumnya untuk menerima klinik_id)
+                // (Fungsi hitungSaldoAkun sudah diupdate)
                 $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
 
-                // Tampilkan hanya jika saldo tidak nol
-                if (round($saldo, 2) != 0) { // Gunakan round untuk presisi
+                if (round($saldo, 2) != 0) { // Gunakan round
                     $saldoDebit = ($account->saldo_normal == 'Debit') ? $saldo : 0;
                     $saldoKredit = ($account->saldo_normal == 'Kredit') ? $saldo : 0;
 
@@ -206,7 +214,7 @@ class LaporanController extends Controller
                     ];
                 }
             }
-        }
+        } // Akhir if(is_numeric($klinikIdFilter))
 
         return view('laporan.neraca-saldo', compact(
             'kliniks',
@@ -214,8 +222,8 @@ class LaporanController extends Controller
             'totalDebit',
             'totalKredit',
             'endDate',
-            'klinikDipilih',
-            'klinikIdFilter' // Kirim untuk selected filter
+            'klinikDipilih', // Kirim model Klinik atau null
+            'klinikIdFilter' // Kirim ID klinik yang difilter
         ));
     }
 
@@ -241,7 +249,7 @@ class LaporanController extends Controller
             $klinikIdFilter = $request->input('klinik_id');
         } else {
             $klinikIdFilter = $user->klinik_id;
-             if (!$klinikIdFilter) {
+             if (!$klinikIdFilter && !$user->hasRole('Superadmin')) {
                  return view('laporan.laba-rugi', [
                      'kliniks' => $kliniks, 'listPendapatan' => [], 'listBiaya' => [],
                      'totalPendapatan' => 0, 'totalBiaya' => 0, 'labaRugi' => 0,
@@ -255,7 +263,7 @@ class LaporanController extends Controller
 
         $startDate = $request->input('start_date', date('Y-m-01'));
         $endDate = $request->input('end_date', date('Y-m-t'));
-        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
+        $klinikDipilih = is_numeric($klinikIdFilter) ? Klinik::find($klinikIdFilter) : null; // Ambil model klinik
 
         $listPendapatan = [];
         $listBiaya = [];
@@ -263,8 +271,8 @@ class LaporanController extends Controller
         $totalBiaya = 0;
         $labaRugi = 0;
 
-        // Hanya proses jika klinik sudah dipilih/ditentukan
-        if ($klinikIdFilter) {
+        // Hanya proses jika klinik sudah dipilih/ditentukan (harus numerik ID)
+        if (is_numeric($klinikIdFilter)) {
             // Ambil akun global DAN akun spesifik klinik
              $pendapatanAccounts = ChartOfAccount::where('tipe_akun', 'Pendapatan')
                                                 ->where(function($q) use ($klinikIdFilter){
@@ -298,7 +306,7 @@ class LaporanController extends Controller
                 }
             }
             $labaRugi = $totalPendapatan - $totalBiaya;
-        }
+        } // Akhir if(is_numeric($klinikIdFilter))
 
         return view('laporan.laba-rugi', compact(
             'kliniks',
@@ -306,7 +314,8 @@ class LaporanController extends Controller
             'totalPendapatan', 'totalBiaya',
             'labaRugi',
             'startDate', 'endDate',
-            'klinikDipilih', 'klinikIdFilter' // Kirim untuk view
+            'klinikDipilih', // Kirim model klinik
+            'klinikIdFilter' // Kirim ID klinik filter
         ));
     }
 
@@ -334,6 +343,10 @@ class LaporanController extends Controller
      * Menampilkan laporan Neraca.
      * Disesuaikan untuk filter klinik berdasarkan role.
      */
+    /**
+     * Menampilkan laporan Neraca.
+     * Disesuaikan untuk filter klinik berdasarkan role.
+     */
     public function neraca(Request $request)
     {
         $user = Auth::user();
@@ -352,7 +365,8 @@ class LaporanController extends Controller
             $klinikIdFilter = $request->input('klinik_id');
         } else {
             $klinikIdFilter = $user->klinik_id;
-             if (!$klinikIdFilter) {
+             if (!$klinikIdFilter && !$user->hasRole('Superadmin')) {
+                 // Kirim data kosong + error jika Admin/Staf tidak punya klinik
                  return view('laporan.neraca', [
                      'kliniks' => $kliniks, 'listAset' => [], 'totalAset' => 0,
                      'listLiabilitas' => [], 'totalLiabilitas' => 0, 'listEkuitas' => [], 'totalEkuitas' => 0,
@@ -365,7 +379,7 @@ class LaporanController extends Controller
         }
 
         $endDate = $request->input('end_date', date('Y-m-t'));
-        $klinikDipilih = $klinikIdFilter ? Klinik::find($klinikIdFilter) : null;
+        $klinikDipilih = is_numeric($klinikIdFilter) ? Klinik::find($klinikIdFilter) : null;
         $yearStartDate = Carbon::parse($endDate)->startOfYear()->format('Y-m-d');
 
         $listAset = []; $totalAset = 0;
@@ -374,9 +388,9 @@ class LaporanController extends Controller
         $labaRugiBerjalan = 0;
         $totalLiabilitasDanEkuitas = 0;
 
-        // Hanya proses jika klinik sudah dipilih/ditentukan
-        if ($klinikIdFilter) {
-            // Aset (Global + Spesifik Klinik)
+        // Hanya proses jika klinik sudah dipilih/ditentukan (harus numerik ID)
+        if (is_numeric($klinikIdFilter)) {
+            // --- A. KELOMPOK ASET (Global + Spesifik Klinik) ---
              $asetAccounts = ChartOfAccount::where('tipe_akun', 'Aset')
                                           ->where(function($q) use ($klinikIdFilter){
                                                $q->whereNull('klinik_id')
@@ -386,13 +400,13 @@ class LaporanController extends Controller
             foreach ($asetAccounts as $account) {
                 // Gunakan fungsi helper hitungSaldoAkun (sudah diupdate)
                 $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
-                if ($saldo != 0) {
+                if (round($saldo, 2) != 0) { // Gunakan round
                     $listAset[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
                     $totalAset += $saldo;
                 }
             }
 
-            // Liabilitas (Global + Spesifik Klinik)
+            // --- B. KELOMPOK LIABILITAS (Global + Spesifik Klinik) ---
              $liabilitasAccounts = ChartOfAccount::where('tipe_akun', 'Liabilitas')
                                                 ->where(function($q) use ($klinikIdFilter){
                                                      $q->whereNull('klinik_id')
@@ -401,13 +415,13 @@ class LaporanController extends Controller
                                                 ->orderBy('kode_akun', 'asc')->get();
             foreach ($liabilitasAccounts as $account) {
                 $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
-                if ($saldo != 0) {
+                 if (round($saldo, 2) != 0) {
                     $listLiabilitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
                     $totalLiabilitas += $saldo;
                 }
             }
 
-            // Ekuitas (Global + Spesifik Klinik)
+            // --- C. KELOMPOK EKUITAS (Global + Spesifik Klinik) ---
              $ekuitasAccounts = ChartOfAccount::where('tipe_akun', 'Ekuitas')
                                               ->where(function($q) use ($klinikIdFilter){
                                                    $q->whereNull('klinik_id')
@@ -416,19 +430,19 @@ class LaporanController extends Controller
                                               ->orderBy('kode_akun', 'asc')->get();
             foreach ($ekuitasAccounts as $account) {
                 $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
-                if ($saldo != 0) {
+                 if (round($saldo, 2) != 0) {
                     $listEkuitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
                     $totalEkuitas += $saldo;
                 }
             }
 
-            // Laba Rugi Berjalan (dari awal tahun s/d end date, untuk klinik ini)
+            // --- D. LABA RUGI BERJALAN (Current Year's Net Income) ---
             // Gunakan fungsi helper hitungLabaRugi (sudah diupdate)
             $labaRugiBerjalan = $this->hitungLabaRugi($yearStartDate, $endDate, $klinikIdFilter);
 
-            $totalEkuitas += $labaRugiBerjalan; // Tambahkan Laba Rugi Berjalan ke Ekuitas
+            $totalEkuitas += $labaRugiBerjalan; // Tambahkan Laba Rugi ke Ekuitas
             $totalLiabilitasDanEkuitas = $totalLiabilitas + $totalEkuitas;
-        }
+        } // Akhir if(is_numeric($klinikIdFilter))
 
         return view('laporan.neraca', compact(
             'kliniks',
@@ -438,9 +452,15 @@ class LaporanController extends Controller
             'labaRugiBerjalan',
             'totalLiabilitasDanEkuitas',
             'endDate',
-            'klinikDipilih', 'klinikIdFilter' // Kirim untuk view
+            'klinikDipilih', // Kirim model Klinik atau null
+            'klinikIdFilter' // Kirim ID klinik filter
         ));
     }
+
+    // --- Pastikan SEMUA FUNGSI HELPER ada di sini ---
+    // private function hitungSaldoAkun($account, $endDate, $klinikId) { ... }
+    // private function hitungMutasiAkun($account, $startDate, $endDate, $klinikId) { ... }
+    // private function hitungLabaRugi($startDate, $endDate, $klinikId) { ... }
 
     /**
      * Fungsi helper untuk menghitung saldo akhir sebuah akun s/d tanggal tertentu
@@ -520,6 +540,259 @@ class LaporanController extends Controller
             ->orderBy('jurnals.id', 'asc')
             ->select('jurnal_details.*')
             ->get();
+    }
+    public function exportBukuBesar(Request $request)
+{
+    $user = Auth::user();
+
+    // 1. Validasi Input Filter (sama seperti bukuBesar())
+    $request->validate([
+        'klinik_id' => ['required', function($attribute, $value, $fail) use ($user){
+             if($value == 'global' && !$user->hasRole('Superadmin')) {
+                  $fail('Anda tidak bisa ekspor akun global.');
+             } elseif (!is_numeric($value) && $value != 'global') {
+                  $fail('Klinik tidak valid.');
+             } elseif (is_numeric($value) && !$user->hasRole('Superadmin') && $user->klinik_id != $value) {
+                 $fail('Anda tidak bisa ekspor data klinik lain.');
+             }
+        }],
+        'akun_id' => 'required|integer|exists:chart_of_accounts,id',
+        'start_date' => 'required|date',
+        'end_date' => 'required|date|after_or_equal:start_date',
+        'type' => 'required|in:excel,pdf' // Tipe export (excel/pdf)
+    ]);
+
+    // 2. Ambil Data (Logika sama persis seperti di bukuBesar())
+    $klinikIdFilter = $request->klinik_id;
+    $akunIdFilter = $request->akun_id;
+    $startDate = $request->start_date;
+    $endDate = $request->end_date;
+
+    $akunDipilih = ChartOfAccount::find($akunIdFilter);
+    $klinikDipilih = null; // Bisa null jika global
+    $actualKlinikId = null; // ID klinik untuk query
+
+    if ($klinikIdFilter === 'global' && $akunDipilih && $akunDipilih->klinik_id === null) {
+        $actualKlinikId = null; // Laporan global
+    } elseif (is_numeric($klinikIdFilter)) {
+        $klinikDipilih = Klinik::find($klinikIdFilter);
+        if ($klinikDipilih && $akunDipilih && ($akunDipilih->klinik_id === null || $akunDipilih->klinik_id == $klinikIdFilter)) {
+             $actualKlinikId = (int)$klinikIdFilter; // Laporan klinik spesifik
+        } else {
+             return back()->with('error', 'Kombinasi klinik dan akun tidak valid untuk diekspor.');
+        }
+    } else {
+        return back()->with('error', 'Konteks klinik tidak valid untuk diekspor.');
+    }
+
+    // Hitung Saldo Awal & Ambil Mutasi (gunakan fungsi helper)
+    $saldoAwal = $this->hitungSaldoAwal($akunDipilih, $startDate, $actualKlinikId);
+    $data = $this->ambilMutasi($akunDipilih, $startDate, $endDate, $actualKlinikId);
+
+    // 3. Siapkan Nama File
+    $klinikName = $klinikDipilih ? $klinikDipilih->kode_klinik ?? str_replace(' ','_',$klinikDipilih->nama_klinik) : 'GLOBAL';
+    $akunKode = $akunDipilih->kode_akun;
+    $fileName = "BukuBesar_{$klinikName}_{$akunKode}_{$startDate}_sd_{$endDate}." . ($request->type == 'pdf' ? 'pdf' : 'xlsx');
+
+    // 4. Lakukan Export
+    if ($request->type == 'pdf') {
+        // Untuk PDF, Laravel Excel perlu library tambahan (misal dompdf)
+        // composer require dompdf/dompdf
+        // Jika Anda belum install, export PDF akan error
+         return Excel::download(new BukuBesarExport($data, $saldoAwal, $akunDipilih, $klinikDipilih, $startDate, $endDate), $fileName, \Maatwebsite\Excel\Excel::DOMPDF);
+    } else {
+        // Export Excel
+         return Excel::download(new BukuBesarExport($data, $saldoAwal, $akunDipilih, $klinikDipilih, $startDate, $endDate), $fileName);
+    }
+}
+public function exportNeracaSaldo(Request $request)
+    {
+        $user = Auth::user();
+
+        // 1. Validasi Input Filter
+        $request->validate([
+            'klinik_id' => ['required', function($attribute, $value, $fail) use ($user){
+                 if (!is_numeric($value)) { $fail('Klinik tidak valid.'); }
+                 elseif (!$user->hasRole('Superadmin') && $user->klinik_id != $value) { $fail('Anda tidak bisa ekspor data klinik lain.'); }
+            }],
+            'end_date' => 'required|date',
+            'type' => 'required|in:excel,pdf'
+        ]);
+
+        // 2. Ambil Data (Logika sama persis seperti neracaSaldo())
+        $klinikIdFilter = $request->klinik_id;
+        $endDate = $request->end_date;
+        $klinikDipilih = Klinik::find($klinikIdFilter);
+
+        if(!$klinikDipilih){ abort(404, 'Klinik tidak ditemukan'); } // Handle jika klinik tdk ada
+
+        $laporanData = []; $totalDebit = 0; $totalKredit = 0;
+
+        $accounts = ChartOfAccount::where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+
+        foreach ($accounts as $account) {
+            $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+            if (round($saldo, 2) != 0) {
+                $saldoDebit = ($account->saldo_normal == 'Debit') ? $saldo : 0;
+                $saldoKredit = ($account->saldo_normal == 'Kredit') ? $saldo : 0;
+                $totalDebit += $saldoDebit; $totalKredit += $saldoKredit;
+                $laporanData[] = [ // Buat array untuk export
+                    'kode_akun' => $account->kode_akun,
+                    'nama_akun' => $account->nama_akun,
+                    'debit' => $saldoDebit, // Kirim angka mentah
+                    'kredit' => $saldoKredit, // Kirim angka mentah
+                ];
+            }
+        }
+
+        // 3. Siapkan Nama File
+        $klinikName = $klinikDipilih->kode_klinik ?? str_replace(' ','_',$klinikDipilih->nama_klinik);
+        $fileName = "NeracaSaldo_{$klinikName}_{$endDate}." . ($request->type == 'pdf' ? 'pdf' : 'xlsx');
+
+        // 4. Lakukan Export
+        $export = new NeracaSaldoExport($laporanData, $totalDebit, $totalKredit, $klinikDipilih, $endDate);
+        if ($request->type == 'pdf') {
+             // Pastikan dompdf terinstall: composer require dompdf/dompdf
+             return Excel::download($export, $fileName, \Maatwebsite\Excel\Excel::DOMPDF);
+        } else {
+             return Excel::download($export, $fileName);
+        }
+    }
+    public function exportLabaRugi(Request $request)
+    {
+        $user = Auth::user();
+
+        // 1. Validasi Input Filter
+        $request->validate([
+            'klinik_id' => ['required', function($attribute, $value, $fail) use ($user){
+                 if (!is_numeric($value)) { $fail('Klinik tidak valid.'); }
+                 elseif (!$user->hasRole('Superadmin') && $user->klinik_id != $value) { $fail('Anda tidak bisa ekspor data klinik lain.'); }
+            }],
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'type' => 'required|in:excel,pdf'
+        ]);
+
+        // 2. Ambil Data (Logika sama persis seperti labaRugi())
+        $klinikIdFilter = $request->klinik_id;
+        $startDate = $request->start_date;
+        $endDate = $request->end_date;
+        $klinikDipilih = Klinik::find($klinikIdFilter);
+
+        if(!$klinikDipilih){ abort(404, 'Klinik tidak ditemukan'); }
+
+        $listPendapatan = []; $listBiaya = [];
+        $totalPendapatan = 0; $totalBiaya = 0; $labaRugi = 0;
+
+        // Hitung Pendapatan
+        $pendapatanAccounts = ChartOfAccount::where('tipe_akun', 'Pendapatan')->where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+        foreach ($pendapatanAccounts as $account) {
+            $saldo = $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikIdFilter);
+            if ($saldo != 0) {
+                $listPendapatan[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                $totalPendapatan += $saldo;
+            }
+        }
+        // Hitung Biaya
+        $biayaAccounts = ChartOfAccount::where('tipe_akun', 'Biaya')->where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+        foreach ($biayaAccounts as $account) {
+            $saldo = $this->hitungMutasiAkun($account, $startDate, $endDate, $klinikIdFilter);
+            if ($saldo != 0) {
+                $listBiaya[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                $totalBiaya += $saldo;
+            }
+        }
+        $labaRugi = $totalPendapatan - $totalBiaya;
+
+        // 3. Siapkan Nama File
+        $klinikName = $klinikDipilih->kode_klinik ?? str_replace(' ','_',$klinikDipilih->nama_klinik);
+        $fileName = "LabaRugi_{$klinikName}_{$startDate}_sd_{$endDate}." . ($request->type == 'pdf' ? 'pdf' : 'xlsx');
+
+        // 4. Lakukan Export
+        $export = new LabaRugiExport($listPendapatan, $listBiaya, $totalPendapatan, $totalBiaya, $labaRugi, $klinikDipilih, $startDate, $endDate);
+        if ($request->type == 'pdf') {
+             return Excel::download($export, $fileName, \Maatwebsite\Excel\Excel::DOMPDF);
+        } else {
+             return Excel::download($export, $fileName);
+        }
+    }
+    public function exportNeraca(Request $request)
+    {
+        $user = Auth::user();
+
+        // 1. Validasi Input Filter
+        $request->validate([
+            'klinik_id' => ['required', function($attribute, $value, $fail) use ($user){
+                 if (!is_numeric($value)) { $fail('Klinik tidak valid.'); }
+                 elseif (!$user->hasRole('Superadmin') && $user->klinik_id != $value) { $fail('Anda tidak bisa ekspor data klinik lain.'); }
+            }],
+            'end_date' => 'required|date',
+            'type' => 'required|in:excel,pdf'
+        ]);
+
+        // 2. Ambil Data (Logika sama persis seperti neraca())
+        $klinikIdFilter = $request->klinik_id;
+        $endDate = $request->end_date;
+        $klinikDipilih = Klinik::find($klinikIdFilter);
+        $yearStartDate = Carbon::parse($endDate)->startOfYear()->format('Y-m-d');
+
+        if(!$klinikDipilih){ abort(404, 'Klinik tidak ditemukan'); }
+
+        $listAset = []; $totalAset = 0;
+        $listLiabilitas = []; $totalLiabilitas = 0;
+        $listEkuitas = []; $totalEkuitasAwal = 0; // Ekuitas sebelum laba rugi
+        $labaRugiBerjalan = 0; $totalLiabilitasDanEkuitas = 0; $totalEkuitasAkhir = 0;
+
+        // Aset
+        $asetAccounts = ChartOfAccount::where('tipe_akun', 'Aset')->where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+        foreach ($asetAccounts as $account) {
+            $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+            if (round($saldo, 2) != 0) {
+                $listAset[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                $totalAset += $saldo;
+            }
+        }
+        // Liabilitas
+        $liabilitasAccounts = ChartOfAccount::where('tipe_akun', 'Liabilitas')->where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+        foreach ($liabilitasAccounts as $account) {
+            $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+             if (round($saldo, 2) != 0) {
+                $listLiabilitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                $totalLiabilitas += $saldo;
+            }
+        }
+        // Ekuitas Awal
+        $ekuitasAccounts = ChartOfAccount::where('tipe_akun', 'Ekuitas')->where(function($q) use ($klinikIdFilter){ $q->whereNull('klinik_id')->orWhere('klinik_id', $klinikIdFilter); })->orderBy('kode_akun')->get();
+        foreach ($ekuitasAccounts as $account) {
+            $saldo = $this->hitungSaldoAkun($account, $endDate, $klinikIdFilter);
+             if (round($saldo, 2) != 0) {
+                $listEkuitas[] = ['kode_akun' => $account->kode_akun, 'nama_akun' => $account->nama_akun, 'total' => $saldo];
+                $totalEkuitasAwal += $saldo;
+            }
+        }
+        // Laba Rugi Berjalan
+        $labaRugiBerjalan = $this->hitungLabaRugi($yearStartDate, $endDate, $klinikIdFilter);
+        $totalEkuitasAkhir = $totalEkuitasAwal + $labaRugiBerjalan;
+        $totalLiabilitasDanEkuitas = $totalLiabilitas + $totalEkuitasAkhir;
+
+        // 3. Siapkan Nama File
+        $klinikName = $klinikDipilih->kode_klinik ?? str_replace(' ','_',$klinikDipilih->nama_klinik);
+        $fileName = "Neraca_{$klinikName}_{$endDate}." . ($request->type == 'pdf' ? 'pdf' : 'xlsx');
+
+        // 4. Lakukan Export
+        $export = new NeracaExport(
+             $listAset, $totalAset,
+             $listLiabilitas, $totalLiabilitas,
+             $listEkuitas, $totalEkuitasAkhir, // Kirim total ekuitas AKHIR
+             $labaRugiBerjalan, // Kirim laba rugi terpisah
+             $totalLiabilitasDanEkuitas,
+             $klinikDipilih, $endDate
+        );
+        if ($request->type == 'pdf') {
+             return Excel::download($export, $fileName, \Maatwebsite\Excel\Excel::DOMPDF);
+        } else {
+             return Excel::download($export, $fileName);
+        }
     }
 
 }

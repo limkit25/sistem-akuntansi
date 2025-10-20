@@ -21,10 +21,10 @@
                     <div class="row">
                         {{-- Filter Klinik (Hanya Superadmin) --}}
                         @role('Superadmin')
-                        <div class="col-md-3">
+                        <div class="col-md-3"> {{-- Sesuaikan lebar kolom --}}
                             <div class="form-group">
                                 <label for="klinik_id">Pilih Klinik <span class="text-danger">*</span></label>
-                                <select class="form-control select2bs4" id="klinik_id" name="klinik_id" required>
+                                <select class="form-control select2bs4 @error('klinik_id') is-invalid @enderror" id="klinik_id" name="klinik_id" required>
                                     <option value="">-- Pilih Klinik --</option>
                                     @foreach ($kliniks as $klinik)
                                         <option value="{{ $klinik->id }}"
@@ -33,6 +33,7 @@
                                         </option>
                                     @endforeach
                                 </select>
+                                @error('klinik_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
                         @else
@@ -41,21 +42,23 @@
                         @endrole
 
                         {{-- Filter Tanggal --}}
-                        <div class="col-md-3">
+                         <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}"> {{-- Sesuaikan lebar --}}
                             <div class="form-group">
                                 <label for="start_date">Tanggal Awal</label>
-                                <input type="date" class="form-control" id="start_date" name="start_date" value="{{ $startDate }}" required>
+                                <input type="date" class="form-control @error('start_date') is-invalid @enderror" id="start_date" name="start_date" value="{{ $startDate }}" required>
+                                 @error('start_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
-                        <div class="col-md-3">
+                         <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-3' : 'col-md-4' }}"> {{-- Sesuaikan lebar --}}
                             <div class="form-group">
                                 <label for="end_date">Tanggal Akhir</label>
-                                <input type="date" class="form-control" id="end_date" name="end_date" value="{{ $endDate }}" required>
+                                <input type="date" class="form-control @error('end_date') is-invalid @enderror" id="end_date" name="end_date" value="{{ $endDate }}" required>
+                                 @error('end_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
 
                         {{-- Tombol Submit --}}
-                        <div class="col-md-2 d-flex align-items-end">
+                         <div class="{{ Auth::user()->hasRole('Superadmin') ? 'col-md-2' : 'col-md-3' }} d-flex align-items-end"> {{-- Sesuaikan lebar --}}
                             <div class="form-group w-100">
                                 <button type="submit" class="btn btn-primary w-100">
                                     <i class="fas fa-search"></i> Tampilkan
@@ -67,9 +70,17 @@
             </form>
         </div>
         {{-- CARD HASIL LAPORAN --}}
-        {{-- Tampilkan hanya jika klinik sudah dipilih/ditentukan --}}
-         @if ($klinikDipilih || (!$klinikDipilih && !Auth::user()->hasRole('Superadmin') && Auth::user()->klinik_id))
-            @php $namaKlinikTampil = $klinikDipilih ? $klinikDipilih->nama_klinik : (Auth::user()->klinik->nama_klinik ?? 'Error'); @endphp
+         @php
+            $namaKlinikTampil = '-';
+            if ($klinikDipilih) {
+                $namaKlinikTampil = $klinikDipilih->nama_klinik;
+            } elseif (!Auth::user()->hasRole('Superadmin') && Auth::user()->klinik_id) {
+                $namaKlinikTampil = Auth::user()->klinik->nama_klinik ?? 'Klinik Error';
+            }
+        @endphp
+
+        {{-- Tampilkan hanya jika klinik sudah dipilih/ditentukan & bukan error --}}
+        @if (is_numeric($klinikIdFilter) && !isset($error))
             <div class="card">
                 <div class="card-header">
                     <h3 class="card-title">
@@ -78,10 +89,25 @@
                     <div class="card-tools">
                         Periode: {{ \Carbon\Carbon::parse($startDate)->format('d M Y') }} s/d {{ \Carbon\Carbon::parse($endDate)->format('d M Y') }}
                     </div>
+                    <div class="btn-group">
+                            @php
+                                $exportParams = [
+                                    'klinik_id' => $klinikIdFilter,
+                                    'start_date' => $startDate,
+                                    'end_date' => $endDate,
+                                ];
+                            @endphp
+                            <a href="{{ route('laporan.labaRugi.export', array_merge($exportParams, ['type' => 'excel'])) }}" class="btn btn-sm btn-success" target="_blank">
+                                <i class="fas fa-file-excel"></i> Excel
+                            </a>
+                            <a href="{{ route('laporan.labaRugi.export', array_merge($exportParams, ['type' => 'pdf'])) }}" class="btn btn-sm btn-danger" target="_blank">
+                                <i class="fas fa-file-pdf"></i> PDF
+                            </a>
+                        </div>
                 </div>
                 <div class="card-body p-0">
                     <table class="table table-bordered">
-                        <thead>
+                         <thead>
                             <tr class="bg-light">
                                 <th style="width: 70%;">Deskripsi Akun</th>
                                 <th style="width: 30%;">Total</th>
@@ -96,7 +122,7 @@
                                 <tr>
                                     {{-- Tambah prefix [G] jika akun global --}}
                                     <td class="pl-4">
-                                        {{ str_starts_with($data['kode_akun'], '1') || str_starts_with($data['kode_akun'], '2') || str_starts_with($data['kode_akun'], '3') ? '' : (strpos($data['nama_akun'], '[G]') === false && App\Models\ChartOfAccount::where('kode_akun', $data['kode_akun'])->whereNull('klinik_id')->exists() ? '[G] ' : '') }}
+                                        {{ App\Models\ChartOfAccount::where('kode_akun', $data['kode_akun'])->whereNull('klinik_id')->exists() ? '[G] ' : '' }}
                                         [{{ $data['kode_akun'] }}] {{ $data['nama_akun'] }}
                                     </td>
                                     <td class="text-right">{{ number_format($data['total'], 2, ',', '.') }}</td>
@@ -119,7 +145,7 @@
                                 <tr>
                                      {{-- Tambah prefix [G] jika akun global --}}
                                     <td class="pl-4">
-                                        {{ str_starts_with($data['kode_akun'], '1') || str_starts_with($data['kode_akun'], '2') || str_starts_with($data['kode_akun'], '3') ? '' : (strpos($data['nama_akun'], '[G]') === false && App\Models\ChartOfAccount::where('kode_akun', $data['kode_akun'])->whereNull('klinik_id')->exists() ? '[G] ' : '') }}
+                                         {{ App\Models\ChartOfAccount::where('kode_akun', $data['kode_akun'])->whereNull('klinik_id')->exists() ? '[G] ' : '' }}
                                         [{{ $data['kode_akun'] }}] {{ $data['nama_akun'] }}
                                     </td>
                                     <td class="text-right">{{ number_format($data['total'], 2, ',', '.') }}</td>
@@ -152,6 +178,7 @@
                     </table>
                 </div>
                 </div>
+         {{-- Kondisi pesan error / info --}}
          @elseif(isset($error))
             <div class="alert alert-danger">{{ $error }}</div>
          @elseif(Auth::user()->hasRole('Superadmin') && !$klinikIdFilter)
@@ -174,7 +201,7 @@
 
         // Set nilai Select2 Klinik yang dipilih (jika Superadmin)
         let selectedKlinikId = "{{ $klinikIdFilter ?? '' }}";
-        if (selectedKlinikId) {
+         if (selectedKlinikId && $('#klinik_id').length) {
             $('#klinik_id').val(selectedKlinikId).trigger('change');
         }
     });
